@@ -104,6 +104,7 @@ All under `<SKILL_ROOT>/` = `C:/Users/Bryce/.claude/skills/review-globals-loop/`
 | Helper | Role | When |
 |---|---|---|
 | `scripts/corpus_retrieve.py` | Cross-project corpus enumeration + false-positive filtering (both corpora); stamps per-turn `attribution` mode | Step 1 |
+| `scripts/materialize.py` | **Privacy-guarded writer** for the agent-materialized JSON files that have no emitting helper — reads JSON on stdin, writes `--out` only after `_guards.assert_safe_out` (fail-closed exit 7) | Steps 3, 6, 8, 9b |
 | `lib/recurrence_promote.py` | Cluster fleet frictions, count distinct **path-attributed** projects, apply the >=N promotion rule | Step 4 |
 | `scripts/reconcile_global_config.py` | Read the global `~/.claude` surface; drop already-encoded candidates | Step 5 |
 | `lib/claimpack.py` | Build the claims-pack + evidence-pack (with explicit join ids); render the **fail-closed** verdict table | Step 6 / Step 9b |
@@ -114,14 +115,33 @@ All helpers are invoked via **Bash** (`python <SKILL_ROOT>/...`). This skill has
 **no Edit/Write tools** — every PRIVATE-CORPUS artifact is written by a helper into
 `.local-state` (never by the agent into `~/.claude`). Several intermediate JSON
 files, however, have **no emitting helper** and must be MATERIALIZED by the agent
-itself via **Bash** (shell redirection, `python -c`, or a heredoc) into
-`<SKILL_ROOT>/.local-state/runs/<id>/`: `fleet-frictions.json` (Step 3),
-`proposals.json` (Step 6), the per-batch `claims-pack-b<b>.json` slices (Step 8),
-`findings-captured.json` (Step 8), and any per-survivor proposal file fed to
-`ledger_store.py upsert` (Step 9b). Writing these intermediate JSON files into the
-skill's own `.local-state/` via Bash is **explicitly allowed** — `.local-state/`
-is skill-owned scratch, not `~/.claude` config — and the no-Edit/Write boundary is
-about never mutating `~/.claude`, not about never producing scratch JSON.
+itself: `fleet-frictions.json` (Step 3), `proposals.json` (Step 6), the per-batch
+`claims-pack-b<b>.json` slices (Step 8), `findings-captured.json` (Step 8), and any
+per-survivor proposal file fed to `ledger_store.py upsert` (Step 9b). These carry
+**verbatim mined cross-project turns** (a friction's/proposal's `evidence[].text`
+IS the verbatim turn), so they must **NOT** be written with raw `Bash` redirection
+(`> file`, `python -c`, a heredoc): raw redirection bypasses the privacy guard, and
+an agent that wrote one to the cwd (a tracked/remoted repo) would leak private
+corpus into a committable tree. **Always materialize them by piping the JSON
+through the privacy-guarded writer:**
+
+```bash
+<produce the JSON on stdout> \
+  | python <SKILL_ROOT>/scripts/materialize.py \
+      --out <SKILL_ROOT>/.local-state/runs/<id>/<file>.json
+```
+
+`materialize.py` routes the resolved `--out` through the same fail-closed
+`_guards.assert_safe_out` (exit 7) that `corpus_retrieve.py`/`claimpack.py` use, so
+even a mistaken `--out` cannot land these files in `~/.claude` config or a git
+working tree — only the skill's own `.local-state/`. When the producer on the left
+of the pipe is itself a helper (e.g. Steps 4–5), run the pipeline under
+`set -o pipefail` so a non-zero upstream exit isn't masked by the writer's success.
+Writing them under
+`.local-state/` is **explicitly allowed** (skill-owned scratch, not `~/.claude`
+config); the helper just makes that boundary mechanical instead of a prose
+convention. The no-Edit/Write boundary is about never mutating `~/.claude`, not
+about never producing scratch JSON.
 
 `scripts/corpus_retrieve.py` is **stdlib only** (`json os re sys glob argparse pathlib datetime`).
 `lib/ledger_store.py` and `lib/apply_record.py` perform **real `jsonschema`
@@ -158,12 +178,18 @@ private cross-project chat. They MUST NOT land in a git-tracked, remoted repo.
   `research/studies/` IS git-tracked with a GitHub remote and no `.gitignore`
   cover — so it is explicitly NOT used for these artifacts.)
 - The Python helpers **refuse to write any corpus/evidence artifact to an unsafe
-  path.** Both `scripts/corpus_retrieve.py` AND `lib/claimpack.py` route every
-  output (every `--out` and every derived output file path) through the shared
-  `lib/_guards.assert_safe_out`, which **fails closed (exit 7)**: it refuses any
-  path inside `~/.claude` EXCEPT the skill's own `.local-state/`, refuses any path
-  inside a git working tree, and refuses on any error. So a stray `--out` cannot
-  leak private turns into a tracked repo or into `~/.claude` config.
+  path.** `scripts/corpus_retrieve.py`, `lib/claimpack.py`, AND
+  `scripts/materialize.py` route every output (every `--out` and every derived
+  output file path) through the shared `lib/_guards.assert_safe_out`, which **fails
+  closed (exit 7)**: it refuses any path inside `~/.claude` EXCEPT the skill's own
+  `.local-state/`, refuses any path inside a git working tree, and refuses on any
+  error. So a stray `--out` cannot leak private turns into a tracked repo or into
+  `~/.claude` config. The agent-materialized files that have no emitting helper
+  (`fleet-frictions.json`, `proposals.json`, the `claims-pack-b<b>.json` slices,
+  `findings-captured.json`, the per-survivor proposal files) are covered by this
+  same guarantee **because they are written through `materialize.py`, never raw
+  `Bash` redirection** — so this "refuse to write to an unsafe path" guarantee now
+  holds for the agent-written corpus files too, not only the helper outputs.
 - The **ledger** lives at `<SKILL_ROOT>/.local-state/proposals-ledger.json`
   (also skill-owned, never `~/.claude` config, never a project).
 
@@ -360,16 +386,28 @@ you MAY fan one project's digest out to a subagent that returns the JSON; note a
 fan-out (subagent billing/hooks were unverified before 2026-06-15 — see the
 Command billing memory).
 
-Concatenate every project's frictions into one
-`<SKILL_ROOT>/.local-state/runs/<id>/fleet-frictions.json`.
+Concatenate every project's frictions into one `fleet-frictions.json`. It carries
+verbatim turns (`evidence[].text`), so materialize it through the privacy-guarded
+writer — **never** raw `Bash` redirection:
+
+```bash
+<emit the concatenated SurfacedFriction[] JSON on stdout> \
+  | python <SKILL_ROOT>/scripts/materialize.py \
+      --out <SKILL_ROOT>/.local-state/runs/<id>/fleet-frictions.json
+```
 
 ### Step 4 — Cross-project recurrence promotion (the new rule)
+
+`global-candidates.json` echoes each cluster's evidence (verbatim turns), so pipe
+`recurrence_promote.py`'s JSON stdout through the privacy-guarded writer rather than
+a raw `>` redirect (whose destination is unguarded):
 
 ```bash
 python <SKILL_ROOT>/lib/recurrence_promote.py \
   --frictions <SKILL_ROOT>/.local-state/runs/<id>/fleet-frictions.json \
   --min-projects <N> --threshold <0.40> --json \
-  > <SKILL_ROOT>/.local-state/runs/<id>/global-candidates.json
+  | python <SKILL_ROOT>/scripts/materialize.py \
+      --out <SKILL_ROOT>/.local-state/runs/<id>/global-candidates.json
 ```
 
 What it does:
@@ -418,10 +456,15 @@ into one global candidate — never silently merge or split them yourself.
 
 ### Step 5 — Reconcile each global candidate against the global config surface
 
+`reconciled.json` carries each candidate's verbatim `evidence`, so pipe
+`reconcile_global_config.py`'s JSON stdout through the privacy-guarded writer
+rather than a raw `>` redirect (whose destination is unguarded):
+
 ```bash
 python <SKILL_ROOT>/scripts/reconcile_global_config.py reconcile \
   <SKILL_ROOT>/.local-state/runs/<id>/global-candidates.json --threshold 0.6 \
-  > <SKILL_ROOT>/.local-state/runs/<id>/reconciled.json
+  | python <SKILL_ROOT>/scripts/materialize.py \
+      --out <SKILL_ROOT>/.local-state/runs/<id>/reconciled.json
 ```
 
 `reconciled.json` **echoes each candidate's full body** (summary, proposedChange,
@@ -473,6 +516,16 @@ pick the single best of the four routing targets, write the **exact patch text**
 a `<=15-word` headline, a smoothed `confidence` (`s/(s+c+2)` — never "always" from
 a thin sample), and attach the cluster's distinct-project evidence (>=2 distinct
 **path-attributed** `projectId`s, each with a real `sourceRef`).
+
+Materialize the ranked `CrossProjectProposal[]` into `proposals.json` through the
+privacy-guarded writer (it carries verbatim `evidence[].text`, so **never** raw
+`Bash` redirection):
+
+```bash
+<emit the ranked CrossProjectProposal[] JSON on stdout> \
+  | python <SKILL_ROOT>/scripts/materialize.py \
+      --out <SKILL_ROOT>/.local-state/runs/<id>/proposals.json
+```
 
 Then freeze the ranked set into the loop's handoff artifacts:
 
@@ -575,8 +628,17 @@ into this skill (the Option-B fork was explicitly rejected; pattern-retrospectiv
 
 Hand the claims-pack to review-loop **in batches of `--batch` proposals**
 (default 3) so the per-loop finding budget is not spread so thin that most
-sub-claims go unexamined. For each batch `b` (a `claims-pack.json` slice the
-agent writes):
+sub-claims go unexamined. For each batch `b`, write the `claims-pack.json` slice
+through the privacy-guarded writer (the slice carries verbatim evidence, so
+**never** raw `Bash` redirection):
+
+```bash
+<emit the batch's slice of claims-pack.json's proposals on stdout> \
+  | python <SKILL_ROOT>/scripts/materialize.py \
+      --out <SKILL_ROOT>/.local-state/runs/<id>/claims-pack-b<b>.json
+```
+
+then hand that slice to review-loop:
 
 ```
 /review-loop --mode claim \
@@ -618,7 +680,16 @@ owns:
 ```
 
 Do not trust the state file to contain these. You transcribe what the lenses
-returned in-session. (One file across all batches.)
+returned in-session. (One file across all batches.) The finding `claim`/`file`
+fields quote the private corpus, so write this file through the privacy-guarded
+writer — accumulate the full array in-session and re-materialize the whole array
+(it overwrites), **never** raw `Bash` redirection:
+
+```bash
+<emit the full findings array (all batches so far) on stdout> \
+  | python <SKILL_ROOT>/scripts/materialize.py \
+      --out <SKILL_ROOT>/.local-state/runs/<id>/findings-captured.json
+```
 
 **`subClaimId` is assigned by the ORCHESTRATING AGENT, not by the reviewer.** The
 claim-lens finding schemas do **not** carry a `subClaimId` field, so it is not
@@ -725,10 +796,17 @@ dropped, U unvalidated (never examined); validation reached `<terminal-state>` a
 iteration `<n>`; finding attribution match rate X%."*
 
 Then upsert survivors into the cross-run ledger (cross-run dedup, corroboration,
-smoothed confidence, dismissed-skip; rejects any malformed proposal):
+smoothed confidence, dismissed-skip; rejects any malformed proposal). Each
+survivor's proposal file carries verbatim `evidence[].text`, so materialize it
+through the privacy-guarded writer first — **never** raw `Bash` redirection — then
+upsert it:
 
 ```bash
-python <SKILL_ROOT>/lib/ledger_store.py upsert --proposal-file <each-survivor>.json
+<emit the survivor's CrossProjectProposal JSON on stdout> \
+  | python <SKILL_ROOT>/scripts/materialize.py \
+      --out <SKILL_ROOT>/.local-state/runs/<id>/<each-survivor>.json
+python <SKILL_ROOT>/lib/ledger_store.py upsert \
+  --proposal-file <SKILL_ROOT>/.local-state/runs/<id>/<each-survivor>.json
 ```
 
 (Skip in `--dry-run`.) Only `survived` (examined & held) proposals are eligible to
@@ -847,8 +925,10 @@ Bash, Task` — there is **no `Edit` and no `Write`**. Every PRIVATE-CORPUS arti
 and the ledger are written by the Python helpers (invoked via Bash) into the skill's
 own `.local-state/`; the helpers refuse any path inside `~/.claude` config or a git
 tree. (The agent may also materialize the intermediate JSON files that have no
-emitting helper — see Helpers note — but only into the skill's `.local-state/` via
-Bash; it still cannot write `~/.claude`.) The agent running this skill therefore **cannot** edit `~/.claude/CLAUDE.md`,
+emitting helper — see Helpers note — but it writes them by piping through
+`scripts/materialize.py`, which routes the `--out` through the same fail-closed
+guard, so those files too can only land in the skill's `.local-state/`; the agent
+still cannot write `~/.claude`.) The agent running this skill therefore **cannot** edit `~/.claude/CLAUDE.md`,
 a global `SKILL.md`, a memory file, or `settings.json` — the apply boundary is
 enforced by the absence of write tools, not by the model choosing to obey a prose
 rule.
@@ -910,11 +990,12 @@ skipped — the mutation requires a write-capable surface a watcher does not dri
   TTY is NOT trusted; `isatty()` is unreliable on Windows), and it also aborts under
   known watcher/unattended env markers (`COMMAND_PARALLEL_SLOT`, `COMMAND_ROOT`,
   `COMMAND_PORT`, `COMMAND_FIELDS`, `CLAUDE_WATCHER`, `COMMAND_WATCHER`, `CI`, …).
-- `corpus_retrieve.py` and `claimpack.py` route every output path through the shared
-  `_guards.assert_safe_out` (refuses `~/.claude` except the skill `.local-state/`,
-  refuses git trees, **exit 7**); `ledger_store.py` likewise refuses any output path
-  inside `~/.claude` config or a git working tree — bookkeeping and private corpus
-  can never be mistaken for config or be committed.
+- `corpus_retrieve.py`, `claimpack.py`, and `scripts/materialize.py` route every
+  output path through the shared `_guards.assert_safe_out` (refuses `~/.claude`
+  except the skill `.local-state/`, refuses git trees, **exit 7**); `ledger_store.py`
+  likewise refuses any output path inside `~/.claude` config or a git working tree —
+  bookkeeping, helper outputs, AND the agent-materialized corpus files can never be
+  mistaken for config or be committed.
 - The skill **never** sets `proposedUpgrade.applied = true` itself; that flips
   only via `apply_record.py` acting on the operator's confirmation (chat-arch's
   "set true ONLY by the user" rule).
