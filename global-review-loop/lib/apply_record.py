@@ -9,7 +9,7 @@ the proposal's proposedUpgrade.applied=true / appliedAt=now.
 Writes ONLY the ledger (via ledger_store helpers). NEVER edits ~/.claude.
 
 IMPORTANT (boundary layering): this is the BOOKKEEPING half of the apply, not
-the apply itself. The review-globals-loop skill has NO write tools, so it cannot
+the apply itself. The global-review-loop skill has NO write tools, so it cannot
 mutate global config under ANY context -- that is the primary, mechanical guard.
 The actual config edit must already have been made by the OPERATOR through a
 write-capable surface (update-config for hooks, the memory mechanism for
@@ -138,7 +138,7 @@ def record_apply(proposal_id, target_files, notes):
         L.atomic_write(path, ledger)
         print(f"recorded apply: {proposal_id} -> {up.get('target')} :: {up.get('targetPath')}")
         print("NOTE: this only recorded bookkeeping. The actual config edit must have "
-              "been made by the operator through a write-capable surface; review-globals-loop "
+              "been made by the operator through a write-capable surface; global-review-loop "
               "has no write tools and never edits ~/.claude itself.")
         return EXIT_OK
 

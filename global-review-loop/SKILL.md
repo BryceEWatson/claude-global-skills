@@ -1,5 +1,5 @@
 ---
-name: review-globals-loop
+name: global-review-loop
 description: >-
   Mine ALL of Bryce's local Claude history across EVERY project (both corpora —
   Claude Code CLI and Cowork local-agent-mode) for operator friction that recurs
@@ -13,14 +13,14 @@ description: >-
   (ONE project, Cowork-only, proposes that project's CLAUDE.md candidates). This
   skill is the GLOBAL, cross-project layer: it only surfaces friction proven to
   recur across >=N DISTINCT projects (counted by cwd-PATH attribution only) and
-  only ever proposes changes to ~/.claude. Invoke as /review-globals-loop.
+  only ever proposes changes to ~/.claude. Invoke as /global-review-loop.
   Triggers: "what global rule should I add", "what recurs across my projects",
   "fleet-wide friction", "improve my global Claude config from how I actually
   work".
 allowed-tools: Read, Grep, Glob, Bash, Task
 ---
 
-# /review-globals-loop
+# /global-review-loop
 
 The **cross-project, global self-improvement pass.** It reads how you actually
 work across your WHOLE fleet — every project, both local Claude corpora — finds
@@ -37,23 +37,23 @@ gate**, not "the others don't propose" (two of them do):
 | `/signal-scan <repo>` | ONE repo | that repo's CLI history | that **repo's** `.claude/` (proposes) | recurs within one repo |
 | `/command-retro` | Command itself | Command's own logs | Command's work queue (proposes) | Command-only friction |
 | `transcript-analysis` | ONE project | that project's **Cowork** transcripts | that **project's** `CLAUDE.md` (proposes per-project candidates) | recurs across that project's sessions |
-| **`/review-globals-loop`** | the **whole fleet** | **ALL projects, BOTH corpora** | the **global `~/.claude/`** (proposes) | recurs across **>=N DISTINCT projects** (path-attributed) |
+| **`/global-review-loop`** | the **whole fleet** | **ALL projects, BOTH corpora** | the **global `~/.claude/`** (proposes) | recurs across **>=N DISTINCT projects** (path-attributed) |
 | `/chat-history-search` | read-only | anything | nothing (search/inventory) | n/a |
 
-**Why review-globals-loop is not a duplicate of transcript-analysis** (the closest
+**Why global-review-loop is not a duplicate of transcript-analysis** (the closest
 sibling — it also mines transcripts and also proposes CLAUDE.md candidates):
 - **Scope.** transcript-analysis is **single-project** (filters by
   `userSelectedFolders` / project keywords, defaults to the CWD) and primarily
-  **Cowork**; review-globals-loop spans **ALL projects in the registry across BOTH
+  **Cowork**; global-review-loop spans **ALL projects in the registry across BOTH
   corpora**.
 - **Bar.** transcript-analysis surfaces what recurs within *one* project's
-  sessions and proposes that **project's** `CLAUDE.md` entries; review-globals-loop
+  sessions and proposes that **project's** `CLAUDE.md` entries; global-review-loop
   promotes **only** friction that recurs across **>=N DISTINCT projects**
   (default 2), attributed by **cwd PATH** not keyword, and routes the fix to the
   **global** `~/.claude` surface.
 - **Single-project leftovers belong elsewhere.** A cluster that is really
   per-project (its per-project candidate is transcript-analysis's job; its
-  per-repo CLI signal is `/signal-scan`'s) is OUT OF SCOPE here. review-globals-loop
+  per-repo CLI signal is `/signal-scan`'s) is OUT OF SCOPE here. global-review-loop
   drops it from the global set and names where it belongs.
 
 **Hard boundary (the no-duplication contract):** anything that recurs in only
@@ -68,7 +68,7 @@ ONLY the cross-project survivors.
 > Command checkout via its TS `SignalStore`; its `frictions.json` is an
 > operator-named, ephemeral CLI argument with no stable path. There is no
 > discoverable per-repo `frictions.json` to consume, and this skill must run on a
-> machine with **no Node/Command checkout**. So review-globals-loop **independently
+> machine with **no Node/Command checkout**. So global-review-loop **independently
 > mines the fleet corpus** (Step 3) and is distinct from signal-scan **because of
 > the >=N-distinct-project gate and the global `~/.claude` target**, not because
 > it reuses signal-scan's output. If a fresh `signal-scan frictions.json` happens
@@ -99,7 +99,7 @@ that this skill cannot perform itself.
 
 ## Helpers (self-contained Python — stdlib + two pip deps; NO Command/chat-arch TS imported)
 
-All under `<SKILL_ROOT>/` = `C:/Users/Bryce/.claude/skills/review-globals-loop/`.
+All under `<SKILL_ROOT>/` = `C:/Users/Bryce/.claude/skills/global-review-loop/`.
 
 | Helper | Role | When |
 |---|---|---|
@@ -221,7 +221,7 @@ Parse from the slash-command arguments (all optional, all have defaults):
 
 ### Step 0 — Pick the study id and scratch dir
 
-Choose `<id>` = `review-globals-loop-<UTC-yyyymmddThhmmZ>`. All run artifacts live under
+Choose `<id>` = `global-review-loop-<UTC-yyyymmddThhmmZ>`. All run artifacts live under
 `<SKILL_ROOT>/.local-state/runs/<id>/` (skill-owned, untracked — see "Where
 artifacts live"). Never `~/.claude` config, never a project, never
 `research/studies/`.
@@ -642,7 +642,7 @@ then hand that slice to review-loop:
 
 ```
 /review-loop --mode claim \
-  --session-id review-globals-loop-<id>-b<b> \
+  --session-id global-review-loop-<id>-b<b> \
   --max-iter 3 \
   <claims under review: .local-state/runs/<id>/claims-pack-b<b>.json> \
   <evidence: .local-state/runs/<id>/evidence-pack.md>
@@ -936,12 +936,12 @@ rule.
 ### Step 10 — Apply (operator-confirmed, through a separate surface)
 
 Applying a survivor is a **separate step the operator drives through a different,
-write-capable skill** — review-globals-loop hands off; it does not apply.
+write-capable skill** — global-review-loop hands off; it does not apply.
 
-1. review-globals-loop **shows** the chosen `survived` proposal — `headline`,
+1. global-review-loop **shows** the chosen `survived` proposal — `headline`,
    `target`, `targetPath`, and the **exact `patch`** — as text.
 2. The operator applies it via the surface that owns that target. None of these
-   are done by review-globals-loop:
+   are done by global-review-loop:
    - `settings-hook` → the **`update-config`** skill (it owns `settings.json`).
    - `memory` → the memory mechanism.
    - `global-claude-md` / `global-skill` → a confirmation-gated edit the operator
@@ -967,11 +967,11 @@ write-capable skill** — review-globals-loop hands off; it does not apply.
    `COMMAND_ROOT`, `COMMAND_PORT`, `COMMAND_FIELDS`, plus `CLAUDE_WATCHER` /
    `COMMAND_WATCHER` / `CLAUDE_UNATTENDED` / `CLAUDE_REVIEW_LOOP_ACTIVE` / `CI`) —
    so even a stray `--confirm-operator` in an automated slot is refused. It also
-   warns that, since review-globals-loop has no write tools, the actual config edit
+   warns that, since global-review-loop has no write tools, the actual config edit
    must already have been made by the operator through the surface above.
 
 **The mutating path is guarded primarily by the absence of write tools.** Because
-review-globals-loop has **no write tools**, it cannot itself perform the global-config
+global-review-loop has **no write tools**, it cannot itself perform the global-config
 mutation under any context (attended or not) — that is the primary guard. As a
 belt-and-suspenders second layer, `apply_record.py` requires **positive attended
 proof** — the explicit `--confirm-operator` token (an interactive TTY is NOT

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ledger_store.py - the cross-run state ledger for review-globals-loop.
+"""ledger_store.py - the cross-run state ledger for global-review-loop.
 
 Owns <skill-root>/.local-state/proposals-ledger.json. Writes ONLY the ledger,
 NEVER ~/.claude config and NEVER a git working tree. Atomic tmp+rename,
@@ -492,7 +492,7 @@ def cmd_list(args):
             ]
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return EXIT_OK
-    print(f"=== review-globals-loop ledger ({len(ledger['proposals'])} proposals, "
+    print(f"=== global-review-loop ledger ({len(ledger['proposals'])} proposals, "
           f"{len(ledger['dismissed'])} dismissed, {len(ledger['applied'])} applied) ===")
     for i, p in enumerate(ranked, 1):
         lc = p.get("loopClosure") or {}

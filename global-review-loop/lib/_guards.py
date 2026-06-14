@@ -1,4 +1,4 @@
-"""Shared safety + identity helpers for review-globals-loop — the SINGLE source of
+"""Shared safety + identity helpers for global-review-loop — the SINGLE source of
 truth so the privacy guard, the project-id normalization, and the similarity
 metric are IDENTICAL across every helper (corpus_retrieve, claimpack,
 ledger_store, recurrence_promote). Duplicating these per-file is what let an
@@ -23,7 +23,7 @@ def _home_claude() -> Path:
 
 def skill_local_state() -> Path:
     """The ONLY path under ~/.claude this skill is allowed to write to."""
-    return (_home_claude() / "skills" / "review-globals-loop" / ".local-state").resolve()
+    return (_home_claude() / "skills" / "global-review-loop" / ".local-state").resolve()
 
 
 def _die(msg: str):
