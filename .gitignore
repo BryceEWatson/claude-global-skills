@@ -1,0 +1,8 @@
+# Private mined corpus + per-run scratch — MUST NEVER be committed.
+# (The whole point of the privacy guard: verbatim cross-project operator turns
+# stay local under each skill's .local-state/.)
+**/.local-state/
+
+# Python bytecode caches
+__pycache__/
+*.pyc
