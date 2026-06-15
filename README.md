@@ -28,3 +28,48 @@ data is written only under each skill's untracked `.local-state/` (git-ignored
 here) and is routed through a fail-closed privacy guard
 (`lib/_guards.assert_safe_out`) so it can never land in a tracked tree or in
 `~/.claude` config. Never commit anything under `.local-state/`.
+
+## Keeping the repo in sync
+
+Model: **live-authoritative + capture.** Skills are edited where they run
+(`~/.claude/skills/<name>/`); this repo is the durable, reviewed mirror. Changes
+flow **live → repo** (capture) as reviewed PRs; the reverse (**repo → live**,
+deploy) is the secondary path for a fresh machine or a rollback.
+
+`scripts/sync.py` is the engine (stdlib-only; never copies `.local-state/`,
+`__pycache__`, `*.pyc`; line-ending-insensitive so a git `autocrlf` working tree
+doesn't show false drift):
+
+```bash
+python scripts/sync.py --check     # report drift live ↔ repo (read-only; exit 3 if drift)
+python scripts/sync.py --capture   # copy live → repo working tree + cruft/secret pre-scan
+                                   # (leaves git add/commit/PR to you, so it lands as a reviewed PR)
+python scripts/sync.py --deploy    # copy repo → live (fresh machine / rollback; preserves live .local-state/)
+```
+
+After `--capture`, review the diff, commit on a `sync/…` branch, open a PR, and run
+`/review-loop` for the verdict — same discipline as any change here.
+
+**Drift-detector hook.** `hooks/skills_drift_hook.py` is a PostToolUse hook: after
+you edit a file under `~/.claude/skills/`, it runs `sync.py --check` and, if that
+skill has drifted from the repo, prints a one-line stderr nudge to capture it.
+Non-blocking (always exits 0). Install by adding to `~/.claude/settings.json`:
+
+```jsonc
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          { "type": "command",
+            "command": "python \"C:/Users/Bryce/Projects/claude-global-skills/hooks/skills_drift_hook.py\"" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Silence it with `CLAUDE_SKILLS_DRIFT_HOOK=0`; point it at a non-default checkout
+with `CLAUDE_GLOBAL_SKILLS_REPO=<path>`.
