@@ -23,7 +23,13 @@ const path = require('path');
 const SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
 const MANIFEST_DIR = path.join(os.homedir(), '.claude', 'skills', 'review-loop', '.local-state');
 const MANIFEST_PATH = path.join(MANIFEST_DIR, 'install-manifest.json');
-const HOOK_COMMAND = `node ${path.join('${HOME}', '.claude', 'skills', 'review-loop', 'stop-hook.cjs')}`;
+const HOOK_COMMAND = `node "${path.join(os.homedir(), '.claude', 'skills', 'review-loop', 'stop-hook.cjs')}"`;
+// Command strings from installs before the absolute-path fix; uninstall removes
+// these too so an old broken entry can still be cleaned up.
+const LEGACY_HOOK_COMMANDS = [
+  `node ${path.join('${HOME}', '.claude', 'skills', 'review-loop', 'stop-hook.cjs')}`,
+];
+const KNOWN_HOOK_COMMANDS = new Set([HOOK_COMMAND, ...LEGACY_HOOK_COMMANDS]);
 const MAX_BACKUPS = 3;
 
 function info(msg) { process.stdout.write(`uninstall-review-hook: ${msg}\n`); }
@@ -56,7 +62,7 @@ function findManagedIndexByCommand(settings) {
   for (let i = 0; i < stop.length; i++) {
     const entry = stop[i];
     if (!entry || !Array.isArray(entry.hooks)) continue;
-    const match = entry.hooks.some(h => h && h.type === 'command' && h.command === HOOK_COMMAND);
+    const match = entry.hooks.some(h => h && h.type === 'command' && KNOWN_HOOK_COMMANDS.has(h.command));
     if (match) return i;
   }
   return -1;
@@ -109,7 +115,7 @@ function main() {
     if (stop && manifest.stopIndex < stop.length) {
       const candidate = stop[manifest.stopIndex];
       const matchesCommand = candidate && Array.isArray(candidate.hooks)
-        && candidate.hooks.some(h => h && h.type === 'command' && h.command === HOOK_COMMAND);
+        && candidate.hooks.some(h => h && h.type === 'command' && KNOWN_HOOK_COMMANDS.has(h.command));
       if (matchesCommand) {
         stopIndex = manifest.stopIndex;
         foundVia = 'manifest';

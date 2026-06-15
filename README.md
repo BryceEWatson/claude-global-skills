@@ -73,3 +73,28 @@ Non-blocking (always exits 0). Install by adding to `~/.claude/settings.json`:
 
 Silence it with `CLAUDE_SKILLS_DRIFT_HOOK=0`; point it at a non-default checkout
 with `CLAUDE_GLOBAL_SKILLS_REPO=<path>`.
+
+## Enabling the review-loop Stop hook
+
+`review-loop` ships its own **Stop hook** (`review-loop/stop-hook.cjs`) plus an
+idempotent installer — so the hook is shared from this repo, not hand-wired.
+After the skill is deployed (`sync.py --deploy`, or on the machine where it
+already lives), wire it into `~/.claude/settings.json`:
+
+```bash
+node ~/.claude/skills/review-loop/install.cjs    # enable  (bakes an absolute path; strips any legacy entry)
+node ~/.claude/skills/review-loop/uninstall.cjs  # disable (surgical removal; preserves unrelated hooks)
+```
+
+The installer resolves an **absolute** path via `os.homedir()` at install time, so
+the entry is correct on any machine — Claude Code's shell-form hooks don't reliably
+expand `${HOME}` on Windows, which would otherwise leave the hook silently dead.
+
+Once enabled, the hook is a cheap **always-on gate**: on every session stop it does
+a no-LLM check and only escalates to the review loop when the change warrants it
+(skips docs/handoffs/scratch-only and already-reviewed diffs), logging every
+decision to `review-loop/.local-state/hook.log`. Controls:
+
+- skip one run: `touch ~/.claude/skills/review-loop/.skip-next`
+- opt a repo out: `<repo>/.claude/review-loop.disabled`
+- tune what counts as reviewable: `<repo>/.claude/review-loop.code-exts`, `…/review-loop.plan-paths`

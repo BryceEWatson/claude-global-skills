@@ -20,6 +20,17 @@
  * Exit codes:
  *   0 — allow stop (with or without `decision` JSON output)
  *   non-0 — error; harness will log but allow stop
+ *
+ * Gating: after the SAFETY exits (re-entry, plan mode, trivial/empty diff,
+ * skip-next, per-project opt-out, terminal state, concurrent-repo) the hook
+ * applies cheap, no-LLM VALUE exits and logs the decision to hook.log either
+ * way — it is an always-on gate, not an always-on review:
+ *   - nothing-reviewable: only docs/handoffs/lockfiles/scratch/generated changed
+ *   - diff-unchanged-since-last-review: this exact diff was already dispatched
+ * Per-project overrides under <repo>/.claude/:
+ *   review-loop.disabled    — opt out entirely
+ *   review-loop.plan-paths  — globs that count as plan artifacts
+ *   review-loop.code-exts   — extensions that count as reviewable code
  */
 
 'use strict';
@@ -116,6 +127,59 @@ function gitDiffChangedFiles(cwd) {
   } catch (_) { return null; }
 }
 
+function gitBranch(cwd) {
+  try {
+    return execFileSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch (_) { return null; }
+}
+
+function gitUntrackedFiles(cwd) {
+  // Untracked, non-ignored files — /review-loop reviews these too (via
+  // `git status --porcelain`), so the hook must count them when deciding
+  // whether there is anything reviewable. Returns [] on failure.
+  try {
+    const out = execFileSync('git', ['-C', cwd, 'ls-files', '--others', '--exclude-standard'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return out.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  } catch (_) { return []; }
+}
+
+function gitReviewStateSha(cwd) {
+  // sha256 of `git diff HEAD` PLUS `git status --porcelain` — identifies the
+  // exact reviewable state (tracked content changes AND added/removed untracked
+  // files) so an unchanged state is not re-dispatched across sessions. If the
+  // full diff is too large to buffer, fall back to a coarser numstat identity so
+  // the anti-spam gate keeps working (degrade, don't silently disable). Returns
+  // null only if git itself is unavailable.
+  const porcelain = () => execFileSync('git', ['-C', cwd, 'status', '--porcelain'], {
+    encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  try {
+    const diff = execFileSync('git', ['-C', cwd, 'diff', 'HEAD'], {
+      encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return crypto.createHash('sha256').update(diff + '\n--\n' + porcelain()).digest('hex');
+  } catch (_) {
+    // Full diff unavailable (e.g. > maxBuffer). numstat is one line per file, so
+    // it stays small even for huge diffs — coarser (line counts, not content)
+    // but stable per state.
+    try {
+      const stat = execFileSync('git', ['-C', cwd, 'diff', 'HEAD', '--numstat'], {
+        encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      return crypto.createHash('sha256').update('numstat\n' + stat + '\n--\n' + porcelain()).digest('hex');
+    } catch (_) { return null; }
+  }
+}
+
+function lastFiredPath(repoSha) {
+  // Per-repo pointer to the review-state sha the hook last dispatched for.
+  return path.join(STATE_ROOT, `lastfired-${repoSha}.json`);
+}
+
 const DEFAULT_PLAN_GLOBS = [
   '**/*-plan.md',
   '**/*-proposal.md',
@@ -154,18 +218,58 @@ function loadPlanGlobs(cwd) {
   return DEFAULT_PLAN_GLOBS.map(globToRegex);
 }
 
-function classifyChangedFiles(files, regexes) {
-  // Returns 'plan' if any file matches a plan-artifact regex, else 'code'.
-  // Mixed plan + code => 'plan' (plan-tuned lenses include 'architecture'
-  // which covers code structure reasonably; ship-readiness on a plan doc
-  // is noise).
-  if (!files || files.length === 0) return null;
-  for (const f of files) {
+// A session that changes ONLY non-code, non-plan files (handoffs, notes, logs,
+// lockfiles, generated output, scratch) does not warrant a multi-agent review
+// loop. A file counts as reviewable code when its extension is in this set (or
+// its basename is in CODE_BASENAMES). Plan artifacts are matched separately by
+// the plan globs above. Override per-project with .claude/review-loop.code-exts
+// (one extension per line, e.g. ".ts"; the file REPLACES this default set).
+const DEFAULT_CODE_EXTENSIONS = new Set([
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.py', '.go', '.rs', '.java', '.kt', '.rb', '.php',
+  '.c', '.cc', '.cpp', '.cxx', '.h', '.hpp', '.cs', '.m', '.mm',
+  '.swift', '.scala', '.sh', '.bash', '.zsh', '.ps1',
+  '.sql', '.css', '.scss', '.sass', '.less',
+  '.vue', '.svelte', '.astro', '.sol',
+]);
+const CODE_BASENAMES = new Set(['Dockerfile', 'Makefile']);
+
+function loadCodeExtensions(cwd) {
+  const overridePath = path.join(cwd, '.claude', 'review-loop.code-exts');
+  if (fs.existsSync(overridePath)) {
+    try {
+      const exts = fs.readFileSync(overridePath, 'utf8')
+        .split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith('#'))
+        .map(s => (s.startsWith('.') ? s : '.' + s).toLowerCase());
+      return new Set(exts);
+    } catch (_) { /* fall through to defaults */ }
+  }
+  return DEFAULT_CODE_EXTENSIONS;
+}
+
+function classifyDiff(files, planRegexes, codeExts) {
+  // 3-way split of the changed files:
+  //   - plan : matches a plan-artifact glob  -> review in plan mode
+  //   - code : reviewable source by extension -> review in code mode
+  //   - skip : everything else (docs, handoffs, lockfiles, scratch, generated)
+  // mode is 'plan' if any plan artifact changed (plan-tuned lenses include
+  // 'architecture', so a mixed plan+code diff routes to plan), else 'code' if
+  // any code file changed, else null (nothing reviewable — exit early).
+  const planFiles = [], codeFiles = [], skipFiles = [];
+  for (const f of (files || [])) {
     // Normalize Windows paths to forward slashes for glob matching.
     const norm = f.replace(/\\/g, '/');
-    if (regexes.some(re => re.test(norm))) return 'plan';
+    if (planRegexes.some(re => re.test(norm))) { planFiles.push(f); continue; }
+    const base = norm.slice(norm.lastIndexOf('/') + 1);
+    const dot = base.lastIndexOf('.');
+    const ext = dot > 0 ? base.slice(dot).toLowerCase() : '';
+    if ((ext && codeExts.has(ext)) || CODE_BASENAMES.has(base)) codeFiles.push(f);
+    else skipFiles.push(f);
   }
-  return 'code';
+  let mode = null;
+  if (planFiles.length) mode = 'plan';
+  else if (codeFiles.length) mode = 'code';
+  return { mode, planFiles, codeFiles, skipFiles };
 }
 
 function readTranscriptTail(transcriptPath, maxBytes = 200000) {
@@ -329,14 +433,63 @@ function main() {
     }
   }
 
-  // All guards passed — emit block to re-invoke the /review-loop skill.
-  // Classify the diff as plan-artifact-bearing or code-only and pass the
-  // mode through so SKILL.md can route to the right reviewer lens set.
-  const iteration = 0; // first invocation; skill will increment internally.
+  // ---- Value gates: does this change actually warrant a review? ----
+  // Everything above is a SAFETY exit. The checks below are VALUE exits — a
+  // cheap, no-LLM look that records in hook.log exactly why the loop did or did
+  // not escalate. The hook is an always-on gate, not an always-on review.
+
+  // Git unavailable: we cannot compute a diff, and /review-loop needs one.
+  if (changedFiles === null) {
+    emitAllowStop('git-unavailable: cannot compute diff (no repo or git missing)');
+  }
+
+  // Reviewable set = tracked changes + untracked non-ignored files (the same
+  // set /review-loop inspects). Untracked-only new code must still trigger.
+  const untracked = gitUntrackedFiles(cwd);
+  const files = changedFiles.concat(untracked.filter(f => !changedFiles.includes(f)));
   const planRegexes = loadPlanGlobs(cwd);
-  const mode = classifyChangedFiles(changedFiles || [], planRegexes) || 'code';
+  const codeExts = loadCodeExtensions(cwd);
+  const { mode, planFiles, codeFiles, skipFiles } = classifyDiff(files, planRegexes, codeExts);
+
+  // Gate A — nothing reviewable changed (only docs / handoffs / lockfiles /
+  // scratch / generated). The most common low-value session; skip it.
+  if (mode === null) {
+    const why = files.length === 0
+      ? 'empty diff'
+      : `${skipFiles.length} non-reviewable file(s) [${skipFiles.slice(0, 5).join(', ')}${skipFiles.length > 5 ? ', …' : ''}]`;
+    emitAllowStop(`nothing-reviewable: ${why}`);
+  }
+
+  // Gate B — we already dispatched a review for this exact diff. Changing any
+  // reviewed line changes the sha and re-arms the loop; an identical diff is
+  // not re-reviewed across sessions (run /review-loop manually to force).
+  const repoSha = top ? sha1Short(top) : null;
+  const diffSha = gitReviewStateSha(cwd);
+  const firedPath = repoSha ? lastFiredPath(repoSha) : null;
+  if (diffSha && firedPath && fs.existsSync(firedPath)) {
+    try {
+      const prev = JSON.parse(fs.readFileSync(firedPath, 'utf8'));
+      if (prev && prev.diff_sha === diffSha) {
+        emitAllowStop(`diff-unchanged-since-last-review (sha=${diffSha.slice(0, 8)})`);
+      }
+    } catch (_) { /* corrupt pointer — fall through and re-fire */ }
+  }
+
+  // Warranted — record that we DISPATCHED a review for this state, then
+  // re-invoke the /review-loop skill, routed to the right reviewer lens set.
+  // Note: this records dispatch, not completion — if the review is interrupted,
+  // the same state won't auto-re-fire (run /review-loop manually to force).
+  if (firedPath && diffSha) {
+    try {
+      fs.writeFileSync(firedPath, JSON.stringify({
+        diff_sha: diffSha, branch: gitBranch(cwd), at: new Date().toISOString(),
+      }));
+    } catch (_) { /* best-effort */ }
+  }
+  const iteration = 0; // first invocation; skill will increment internally.
+  const reviewable = planFiles.length + codeFiles.length;
   const skillCommand = `/review-loop --auto --session-id ${sessionId} --iteration ${iteration} --mode ${mode}`;
-  logLine(`block: invoke skill iter=${iteration} mode=${mode} files=${changedFiles.length}`);
+  logLine(`block: invoke skill iter=${iteration} mode=${mode} files=${files.length} reviewable=${reviewable} skipped=${skipFiles.length} sha=${diffSha ? diffSha.slice(0, 8) : 'n/a'}`);
   emitBlock({
     skillCommand,
     systemMessage: `Review-loop iter ${iteration + 1} starting in ${mode} mode (skip next: touch ${SKIP_NEXT_MARKER})`,

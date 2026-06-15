@@ -32,10 +32,19 @@ const path = require('path');
 const SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
 const MANIFEST_DIR = path.join(os.homedir(), '.claude', 'skills', 'review-loop', '.local-state');
 const MANIFEST_PATH = path.join(MANIFEST_DIR, 'install-manifest.json');
-const HOOK_COMMAND = `node ${path.join('${HOME}', '.claude', 'skills', 'review-loop', 'stop-hook.cjs')}`;
-// Build the exact command the user's settings.json will contain. Claude
-// Code substitutes ${HOME} at hook-execution time; we keep the literal
-// string in settings.json so the file is portable.
+// Absolute path baked at install time. Claude Code's shell-form hooks do NOT
+// reliably expand POSIX ${HOME}/$HOME on Windows — the literal string is handed
+// to `node`, which then fails to find the script (this is why the hook silently
+// never fired). Resolve the real home dir now and quote it to tolerate spaces in
+// the profile path. settings.json is per-machine, so an absolute path is correct
+// here, not a portability regression.
+const HOOK_COMMAND = `node "${path.join(os.homedir(), '.claude', 'skills', 'review-loop', 'stop-hook.cjs')}"`;
+// Command strings from installs BEFORE the absolute-path fix. install strips
+// these too, so re-running install cleanly replaces a broken legacy entry
+// instead of leaving a duplicate dead hook behind.
+const LEGACY_HOOK_COMMANDS = [
+  `node ${path.join('${HOME}', '.claude', 'skills', 'review-loop', 'stop-hook.cjs')}`,
+];
 const MANAGED_VERSION = 1;
 const MAX_BACKUPS = 3;
 
@@ -133,15 +142,23 @@ function main() {
 
   const { existed, json: settings, raw } = readSettings();
 
-  // Identify any existing managed entry (idempotent re-install / version upgrade).
-  const existingIdx = findManagedIndex(settings);
   settings.hooks = settings.hooks && typeof settings.hooks === 'object' ? settings.hooks : {};
   if (!Array.isArray(settings.hooks.Stop)) settings.hooks.Stop = [];
 
-  if (existingIdx >= 0) {
-    settings.hooks.Stop.splice(existingIdx, 1);
-    info(`removed prior managed entry at index ${existingIdx}`);
+  // Strip any prior managed entry (current command) AND any legacy entry from
+  // before the absolute-path fix, so re-install cleanly replaces a stale/broken
+  // hook instead of leaving a duplicate. (Idempotent re-install / version upgrade.)
+  const known = new Set([HOOK_COMMAND, ...LEGACY_HOOK_COMMANDS]);
+  let stripped = 0;
+  for (let i = settings.hooks.Stop.length - 1; i >= 0; i--) {
+    const entry = settings.hooks.Stop[i];
+    if (entry && Array.isArray(entry.hooks)
+      && entry.hooks.some(h => h && h.type === 'command' && known.has(h.command))) {
+      settings.hooks.Stop.splice(i, 1);
+      stripped++;
+    }
   }
+  if (stripped) info(`removed ${stripped} prior managed/legacy entr${stripped === 1 ? 'y' : 'ies'}`);
 
   // Append a fresh managed entry.
   const newEntry = buildManagedEntry();

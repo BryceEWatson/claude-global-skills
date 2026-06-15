@@ -205,18 +205,94 @@ test('hook: project-level plan-paths override widens what counts as plan', () =>
   assert.ok(/--mode plan\b/.test(out.reason), `override should classify as plan, got: ${out.reason}`);
 });
 
-test('hook: empty plan-paths override demotes everything to code', () => {
+test('hook: empty plan-paths override + .md is nothing-reviewable (no block)', () => {
   const home = mkTempHome();
-  // File matches DEFAULT globs (-plan.md), would normally be plan.
+  // -plan.md normally => plan. Empty override => no plan globs. A .md is not a
+  // code extension, so nothing reviewable changed => the hook must NOT fire.
   const repo = gitRepoWithStagedFile(home, 'reports/x-plan.md', '# x\n');
-  // Empty override file -> zero globs -> nothing classifies as plan.
   fs.mkdirSync(path.join(repo, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(repo, '.claude', 'review-loop.plan-paths'), '# empty\n');
   const transcript = fakeTranscriptWithEdit(home, 'p-empty-override');
   const r = runHook(home, { session_id: 'p-empty-override', cwd: repo, transcript_path: transcript });
   assert.equal(r.status, 0);
+  assert.equal(parseStdout(r), null, 'a non-plan .md is not reviewable code => no block');
+});
+
+// -----------------------------------------------------------------------
+// Value-gate tests (nothing-reviewable / unchanged-diff / code-exts override)
+// -----------------------------------------------------------------------
+
+test('hook: docs + scratch-only diff is nothing-reviewable (no block)', () => {
+  const home = mkTempHome();
+  const repo = gitRepoWithStagedFile(home, '.claude/handoffs/note.md', '# handoff\n');
+  fs.writeFileSync(path.join(repo, 'scratch.txt'), 'junk\n');
+  spawnSync('git', ['-C', repo, 'add', '.']);
+  const transcript = fakeTranscriptWithEdit(home, 'p-docs');
+  const r = runHook(home, { session_id: 'p-docs', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  assert.equal(parseStdout(r), null, 'docs + scratch only => no review loop');
+});
+
+test('hook: unchanged diff is not re-reviewed on a second stop', () => {
+  const home = mkTempHome();
+  const repo = gitRepoWithStagedFile(home, 'src/foo.ts', 'export const x = 1;\nexport const y = 2;\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-twice');
+  const r1 = runHook(home, { session_id: 'p-twice-a', cwd: repo, transcript_path: transcript });
+  const out1 = parseStdout(r1);
+  assert.ok(out1 && out1.decision === 'block', 'first stop should fire a review');
+  // Second stop, different session id, SAME diff => anti-spam skip.
+  const r2 = runHook(home, { session_id: 'p-twice-b', cwd: repo, transcript_path: transcript });
+  assert.equal(r2.status, 0);
+  assert.equal(parseStdout(r2), null, 'identical diff should not re-fire');
+});
+
+test('hook: code-exts override widens what counts as reviewable code', () => {
+  const home = mkTempHome();
+  // .json is NOT reviewable by default => would be nothing-reviewable...
+  const repo = gitRepoWithStagedFile(home, 'config/app.json', '{"a":1}\n');
+  // ...but the project override declares .json as reviewable code.
+  fs.mkdirSync(path.join(repo, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.claude', 'review-loop.code-exts'), '.json\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-json');
+  const r = runHook(home, { session_id: 'p-json', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
   const out = parseStdout(r);
   assert.ok(out, 'expected a block decision');
-  assert.equal(out.decision, 'block');
-  assert.ok(/--mode code\b/.test(out.reason), `empty override should demote to code, got: ${out.reason}`);
+  assert.ok(/--mode code\b/.test(out.reason), `json override should fire as code, got: ${out.reason}`);
+});
+
+// Untracked files: /review-loop reviews them, so the hook must count them too
+// (a brand-new untracked code file is not yet in `git diff HEAD`).
+function gitRepoWithUntrackedFile(home, relPath, content) {
+  const repo = path.join(home, 'repo');
+  fs.mkdirSync(repo, { recursive: true });
+  spawnSync('git', ['init', '-q'], { cwd: repo });
+  spawnSync('git', ['-C', repo, 'config', 'user.name', 't']);
+  spawnSync('git', ['-C', repo, 'config', 'user.email', 't@t']);
+  spawnSync('git', ['-C', repo, 'config', 'commit.gpgsign', 'false']);
+  spawnSync('git', ['-C', repo, 'commit', '--allow-empty', '-m', 'init', '-q']);
+  const full = path.join(repo, relPath);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, content); // deliberately NOT `git add`ed
+  return repo;
+}
+
+test('hook: untracked new code file still triggers a review', () => {
+  const home = mkTempHome();
+  const repo = gitRepoWithUntrackedFile(home, 'src/new.ts', 'export const z = 3;\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-untracked');
+  const r = runHook(home, { session_id: 'p-untracked', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out && out.decision === 'block', 'untracked new .ts should still fire');
+  assert.ok(/--mode code\b/.test(out.reason), `expected --mode code, got: ${out.reason}`);
+});
+
+test('hook: untracked docs-only does not trigger a review', () => {
+  const home = mkTempHome();
+  const repo = gitRepoWithUntrackedFile(home, 'NOTES.md', '# notes\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-untracked-docs');
+  const r = runHook(home, { session_id: 'p-untracked-docs', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  assert.equal(parseStdout(r), null, 'untracked docs only => no review loop');
 });
