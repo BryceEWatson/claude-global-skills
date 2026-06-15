@@ -574,15 +574,22 @@ hash.
 ### Step 7 — Loop-closure check (is a previously-applied fix still failing?)
 
 For each entry in the `applied[]` array surfaced by the Step 2
-`list --full --json` call, detect recurrence yourself — **there is no helper for
-the detection; the agent performs it** over the corpus retrieved in Step 1.
-Concretely, for each applied entry `{proposalId, canonicalRule, appliedAt}`: scan
-`<SKILL_ROOT>/.local-state/runs/<id>/turns.ndjson` for any turn whose `tsMs` is
-**> `appliedAt`** AND whose text matches the rule's intent — match on the rule's
-key content (or reuse the shared metric, e.g. a one-off
-`python -c "import sys; sys.path.insert(0,'<SKILL_ROOT>/lib'); import _guards; print(_guards.cosine_sim(a,b))"`
-with a `>= 0.40` cut), **not** a brittle substring. The first such hit is the
-recurrence. If one exists, record it:
+`list --full --json` call, detect post-apply recurrence with the dedicated
+helper — **do not interpolate mined corpus text into a `python -c` shell string**
+(mined turns are untrusted; that is a shell-injection surface). First materialize
+the `applied[]` array to `applied.json` via the privacy-guarded writer
+(`scripts/materialize.py`, the same writer Step 8 uses), then run the detector —
+it streams `turns.ndjson`, matches each applied rule against later turns with
+`_guards.cosine_sim` (cutoff 0.40, `tsMs > appliedAt`), and only ever passes
+corpus text to Python as data (never to a shell):
+
+```bash
+python <SKILL_ROOT>/lib/loop_closure_scan.py \
+  --turns <SKILL_ROOT>/.local-state/runs/<id>/turns.ndjson \
+  --applied <SKILL_ROOT>/.local-state/runs/<id>/applied.json --json
+```
+
+For each `RECURRED` hit it reports (`{proposalId, recurredSession, ts}`), record it:
 
 ```bash
 python <SKILL_ROOT>/lib/ledger_store.py mark-recurrence \
