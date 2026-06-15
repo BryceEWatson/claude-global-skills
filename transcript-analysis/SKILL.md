@@ -295,7 +295,7 @@ Ranked by frequency (number of unique sessions where the pattern appears):
 - **Pattern name** — short descriptive label
 - **Category** — A through F
 - **Session count** — how many unique sessions exhibit this pattern
-- **Representative quotes** — 1-2 short verbatim excerpts from user messages
+- **Representative quotes** — 1-2 short verbatim excerpts from user messages, each tagged with a provenance pointer `<cliSessionId>/<lineIndex>` (see **Evidence Discipline**)
 - **Recommendation** — one of:
   - "CLAUDE.md candidate" — encode as a permanent rule
   - "Skill candidate" — encode as a procedural skill or slash command
@@ -327,6 +327,66 @@ Every pattern identified with:
 - Category
 - Session count
 - Key signal phrases
+
+---
+
+## Evidence Discipline — Provenance, Privacy & Dedup
+
+This skill lifts **verbatim transcript excerpts** into durable artifacts — the
+report under `research/studies/` and the findings ledger — that often live in a
+committed (sometimes deployed) repo. The discipline below **adapts** `story-miner`'s
+mining mechanics to this prompt-only skill; where it diverges from story-miner
+(which does the work in a preprocessor), that is called out. It applies whenever a
+quote or finding leaves the raw transcript (Phases 3-4).
+
+**1. Provenance-grounded quoting.** Tag every surfaced quote with a pointer to its
+source line so the quote is *checkable*: `<cliSessionId>/<lineIndex>` — `cliSessionId`
+because that is what names the transcript file (`<cliSessionId>.jsonl`; for a CLI
+session the session id IS the file name), and `<lineIndex>` the 0-based line number
+in that JSONL. **Capture the line index while parsing in Phase 2.1** — you are
+already iterating the lines. story-miner additionally suffixes `#<contentHash16>`
+(the first 16 hex of a SHA-256 over the first ~400 chars of that line's extracted (redacted, truncated) text, computed by
+its preprocessor); replicate that suffix only if you compute the hash
+programmatically, otherwise the `<cliSessionId>/<lineIndex>` pair is the floor. The
+pointer turns the Anti-Pattern Checklist's "actual user messages, not paraphrases"
+from an aspiration into something verifiable. *Caveat:* Phase 2 joins/strips blocks
+and truncates to ~1500 chars, so a quote is verbatim against the **extracted** text
+of that line, not necessarily a byte-substring of the raw line. Record the pointer
+next to the quote in both the report and the ledger; a quote you cannot point to
+does not go in the report.
+
+**2. Redact before surfacing.** story-miner gates every output through a
+deterministic secret/PII scanner; replicate the **posture**, not its exact regexes.
+Before writing ANY verbatim excerpt, strip at least: provider tokens/keys (`sk-…`,
+`ghp_…`, `github_pat_…`, `glpat-…`, `AKIA…`, `AIza…`, `xox[baprs]-…`), JWTs, PEM
+private-key blocks, `Authorization:`/`Cookie:` headers, DB connection strings, and
+long hex/base64 runs; and neutralize home-directory paths (`C:\Users\<name>\…`,
+`/home/<name>/…`, `/Users/<name>/…`) so a username never leaks. Redaction is
+best-effort — a floor, not a guarantee.
+
+**3. Scan the output before finalizing.** After drafting the report + ledger, scan
+the written files for the patterns above (a `Grep` pass suffices). On any hit,
+redact and re-scan until clean. **Never finalize an unscanned report** — this is the
+prompt-only analogue of story-miner's gated `--scan-dir` step (which exits non-zero
+until clean).
+
+**4. Never quote model-internal or system text.** Surface quotes only from
+`user`/`assistant` **text** blocks — the qualifier is on the *block*, not the line
+(one `user` line can carry hundreds of `tool_result` blocks). **From story-miner:**
+never quote `thinking`/reasoning content, and cross-check the guard — a quote's
+provenance must resolve to a text block, not a thinking block. **Reinforcing this
+skill's own Phase 2.3 stripping:** never quote `<system-reminder>`,
+`<scheduled-task>`, `<ide_selection>`, `<file_contents>`, or tool output either.
+
+**5. Deterministic dedup before counting.** A pattern's session count is
+load-bearing — it drives ranking and the 2+/3+ thresholds — so don't let one
+friction, surfaced under two labels, count twice. Before counting, merge
+near-identical findings deterministically: extract each finding's rare key-terms
+(file paths, function names, error-class names, minus a common-word stoplist) and
+treat two findings as the same pattern when they share **>= 3** rare terms
+(story-miner's default `minRareTermOverlap`; drop to 2 for short, term-sparse
+findings). This complements the LLM thematic clustering in Phase 3 with a
+deterministic merge.
 
 ---
 
@@ -398,7 +458,7 @@ This lives in the project's `.claude/` directory (not the user's `~/.claude/`) b
       "action_date": "2026-03-18",
       "notes": "Recurrence should drop to zero — monitor in next run",
       "quotes": [
-        "Make sure you use the local windows file path, not your VM file path"
+        {"ref": "<cliSessionId>/<lineIndex>", "text": "Make sure you use the local windows file path, not your VM file path"}
       ]
     }
   ],
@@ -578,3 +638,6 @@ Before finalizing the report, verify:
 - [ ] CLAUDE.md candidates are rules the user stated, not inferences about what they might want
 - [ ] Unresolved loops are genuinely unresolved (check for resolution artifacts in later sessions)
 - [ ] The report distinguishes between "user keeps saying this" (Category A) and "this keeps failing" (Category C)
+- [ ] Every surfaced quote has a provenance pointer (`<cliSessionId>/<lineIndex>`) that resolves to a verbatim `user`/`assistant` text block — never thinking, system, or tool content
+- [ ] The report and ledger were redacted and scanned for secrets/PII and home-directory paths before finalizing
+- [ ] Near-identical findings were deduped by shared rare terms (>= 3) before counting, so no single friction is double-counted across labels
