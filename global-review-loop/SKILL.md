@@ -517,6 +517,22 @@ a `<=15-word` headline, a smoothed `confidence` (`s/(s+c+2)` — never "always" 
 a thin sample), and attach the cluster's distinct-project evidence (>=2 distinct
 **path-attributed** `projectId`s, each with a real `sourceRef`).
 
+**Surface-fit / concision gate — apply BEFORE routing a candidate to
+`global-claude-md`.** A global CLAUDE.md line is not free: a bloated CLAUDE.md
+makes Claude *ignore* instructions, so every line dilutes the rest. Step 5 only
+proved the candidate isn't *already* encoded — not that a prose line is the right
+home. Two tests:
+1. **Would removing this line cause a mistake?** If not, it hasn't earned a
+   permanent line — route it to a lighter surface or drop it.
+2. **Must it steer *every* conversation?** If it's domain knowledge that needn't
+   bloat every chat → `global-skill`; a durable fact/correction → `memory`;
+   something that must be *enforced* every time → `settings-hook`. Pick
+   `global-claude-md` only when the rule must steer every conversation and no
+   lighter surface fits.
+This is the entry-side complement to the Step 7 escalation (a prose rule that keeps
+getting ignored → mechanize): together they guard both against over-loading
+CLAUDE.md and against a prose rule that never fires.
+
 Materialize the ranked `CrossProjectProposal[]` into `proposals.json` through the
 privacy-guarded writer (it carries verbatim `evidence[].text`, so **never** raw
 `Bash` redirection):
@@ -874,7 +890,7 @@ The skill is the **global** layer — per-project config is out of scope (that's
 
 | `target` | `targetPath` example | When |
 |---|---|---|
-| `global-claude-md` | `~/.claude/CLAUDE.md` | A standing behavior/preference rule for the global directives. |
+| `global-claude-md` | `~/.claude/CLAUDE.md` | A standing behavior/preference rule that must steer **every** conversation. **Carries a dilution cost** — choose it only after the Step 6 surface-fit/concision gate (a bloated CLAUDE.md makes Claude ignore instructions); if a lighter surface fits, use that. |
 | `global-skill` | `~/.claude/skills/<name>/SKILL.md` | Best fixed by creating/editing a reusable skill, not a prose line. |
 | `memory` | `~/.claude/projects/.../memory/<slug>.md` | A durable fact/correction better as auto-memory than a hard rule. |
 | `settings-hook` | `settings.json :: hooks.<Event>` | Must be *enforced* by the harness (rule keeps getting ignored as prose → mechanize). Apply via `update-config`. |
