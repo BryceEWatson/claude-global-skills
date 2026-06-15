@@ -106,7 +106,7 @@ function main() {
 
   if (manifest && Number.isInteger(manifest.stopIndex)) {
     const stop = settings.hooks && Array.isArray(settings.hooks.Stop) ? settings.hooks.Stop : null;
-    if (stop && stopIndex < stop.length) {
+    if (stop && manifest.stopIndex < stop.length) {
       const candidate = stop[manifest.stopIndex];
       const matchesCommand = candidate && Array.isArray(candidate.hooks)
         && candidate.hooks.some(h => h && h.type === 'command' && h.command === HOOK_COMMAND);
