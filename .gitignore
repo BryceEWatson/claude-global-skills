@@ -6,3 +6,8 @@
 # Python bytecode caches
 __pycache__/
 *.pyc
+
+# Never commit a real API key dropped where a skill's .env loader looks
+# (the gemini-image skill reads .env from the cwd or next to its script).
+.env
+**/.env
