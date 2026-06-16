@@ -14,7 +14,7 @@ jobs:
         with:
           node-version: "20"
       - name: Run node tests
-        run: node --test review-loop/*.test.cjs chat-arch-thrash-detect/*.test.cjs
+        run: node --test review-loop/*.test.cjs
       - name: Syntax-check every tracked .cjs
         run: |
           for f in $(git ls-files '*.cjs'); do

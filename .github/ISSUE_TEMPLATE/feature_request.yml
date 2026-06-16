@@ -32,7 +32,6 @@ body:
       label: Which skill?
       description: The skill this relates to, or "new skill" if you're proposing one.
       options:
-        - chat-arch-thrash-detect
         - chat-history-search
         - gemini-image
         - global-review-loop

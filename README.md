@@ -54,7 +54,6 @@ domains, and assumptions to yours.
 | [`transcript-analysis`](transcript-analysis/) | Single-project transcript miner → proposes that project's `CLAUDE.md` candidates. The single-project sibling of `global-review-loop`. |
 | [`seo-index-validation`](seo-index-validation/) | Probe a deployed site's crawl/index health (status codes, redirects, soft-404, sitemap, GSC) and diagnose why pages aren't indexed. A no-auth `bash`+`curl` script plus a playbook. |
 | [`global-review-loop`](global-review-loop/) | Mine your whole fleet's history for friction that recurs across projects, then propose global `~/.claude` changes — reconciled against what already ships and self-validated by an adversarial claim loop. (Wired to a project registry; see its SKILL.md.) |
-| [`chat-arch-thrash-detect`](chat-arch-thrash-detect/) | A `PostToolUse` hook that nudges when a session falls into edit-thrash / read-loop / test-loop / tool-flail spirals. Hook host (not slash-invoked); ships its installer. |
 | [`weekly-work-log`](weekly-work-log/) | Build a public weekly work-log page from session-end handoffs + git, with every number re-verified. Wired to the author's site as a worked example. |
 
 > `session-handoff` is a thin alias that routes to `session-end` (the skill was
