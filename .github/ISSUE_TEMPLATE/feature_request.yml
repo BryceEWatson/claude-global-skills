@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest a new capability or an improvement to an existing skill.
+title: "[feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Keep it concrete — the problem first, then what you'd want.
+
+        Please don't paste raw chat transcripts or API keys; redact before filing.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and where does it fall short today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen? Describe the behavior, not necessarily the implementation.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: skill
+    attributes:
+      label: Which skill?
+      description: The skill this relates to, or "new skill" if you're proposing one.
+      options:
+        - chat-arch-thrash-detect
+        - chat-history-search
+        - gemini-image
+        - global-review-loop
+        - pattern-retrospective
+        - review-loop
+        - seo-index-validation
+        - session-end
+        - session-pickup
+        - transcript-analysis
+        - weekly-work-log
+        - tooling / scripts (sync.py, hooks, repo plumbing)
+        - new skill
+        - other / not sure
+    validations:
+      required: true

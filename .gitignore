@@ -1,0 +1,20 @@
+# Private mined corpus + per-run scratch — MUST NEVER be committed.
+# (The whole point of the privacy guard: verbatim cross-project operator turns
+# stay local under each skill's .local-state/.)
+**/.local-state/
+
+# Python bytecode caches
+__pycache__/
+*.pyc
+
+# Never commit a real API key dropped where a skill's .env loader looks
+# (the gemini-image skill reads .env from the cwd or next to its script).
+.env
+**/.env
+
+# Local Claude Code working state — session handoffs, settings, scratch.
+# Handoffs can carry private cross-project context and MUST NEVER be published.
+.claude/
+
+# pytest cache (defense-in-depth; don't rely on pytest's own inner .gitignore)
+.pytest_cache/
