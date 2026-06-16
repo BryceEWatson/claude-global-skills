@@ -124,8 +124,8 @@ def evidence_distinct_path_projects(proposal) -> set:
             continue
         if e.get("attribution") == "path":
             # Use the SHARED identity so this >=2-distinct-PATH-project gate
-            # collapses ids exactly as claimpack/recurrence do (e.g. "Shopforge"
-            # and "shopforge" are one project) -- inconsistent normalization
+            # collapses ids exactly as claimpack/recurrence do (e.g. "MyProject"
+            # and "myproject" are one project) -- inconsistent normalization
             # previously rejected a survived proposal at upsert.
             projs.add(_guards.normalize_project_id(pid))
     return projs

@@ -1,8 +1,8 @@
 # Gemini image-generation — shared contract (SPEC)
 
-The single source of truth for how Bryce's projects call the Gemini image API.
+The single source of truth for how projects call the Gemini image API.
 The Python core in this skill is the reference implementation; the TypeScript
-callers (ShopForge, ShopSmith\_v2, ShopSmithCowork, shopforge\_v4) each have their
+callers each have their
 own embedded code but **must conform to this contract**. When the API changes,
 update this file first, then the reference core, then reconcile the callers.
 
@@ -39,7 +39,7 @@ Key resolution order (all callers): explicit arg → `GEMINI_API_KEY` →
 > **Retired:** `gemini-2.0-flash-exp-image-generation` /
 > `gemini-2.0-flash-preview-image-generation` — low resolution (~680×1024), being
 > deprecated. Any caller still on these should move to `gemini-2.5-flash-image`
-> or `gemini-3-pro-image`. (See conformance — shopforge\_v4.)
+> or `gemini-3-pro-image`. (See conformance — internal caller B.)
 
 ## 2.1 Default-model resolution (reference core behaviour)
 
@@ -146,7 +146,7 @@ A response may contain **multiple** image parts — save them all, do not overwr
   and surface a specific reason — never a bare "no image".
 - **Content-policy reprompt** (optional, project-level): softening a first-attempt
   safety block by prepending "artistic, painterly, classical fine art" is an
-  established pattern (ShopSmithCowork) but belongs in the *project*, not the core.
+  established pattern but belongs in the *project*, not the core.
 
 ## 6. Watermarking
 
@@ -165,11 +165,11 @@ correct generation/editing only.
 | Caller | Lang | Model | Config shape | Ref-image input | Multi-image save | Safety diag | Conforms? |
 |---|---|---|---|---|---|---|---|
 | **gemini-image core** (this skill) | Py | best-available (def); 2.5-flash floor | imageConfig | ✅ | ✅ | ✅ | reference |
-| **seo-topic-funnels** | Py | 3-pro-image-preview | imageConfig (SDK) | ✖ | ✖ | partial | conforms via SDK wrapper; left as-is (cold; SDK-keyed governance makes vendoring a net downgrade) |
-| **shopforge\_v4** | TS | ⚠️ `gemini-2.0-flash-preview-image-generation` (retired) | imageConfig | ✖ | ✖ | ✖ | **model upgrade needed** |
-| **ShopSmith\_v2** | TS | 3-pro-image-preview | imageConfig | ✖ | n/a | classified errors | OK (legacy SDK) |
-| **ShopSmithCowork** | TS | dual: 3-pro / 2.5-flash / 2.0-exp | imageConfig | ✖ | ✅ | reprompt | OK; drop 2.0-exp path |
-| **ShopForge** | TS | 3-pro-image-preview | imageConfig | ✖ | n/a | retry only | OK; could prefer GA `gemini-3-pro-image` |
+| internal caller A | Py | 3-pro-image-preview | imageConfig (SDK) | ✖ | ✖ | partial | conforms via SDK wrapper; left as-is |
+| internal caller B | TS | ⚠️ `gemini-2.0-flash-preview-image-generation` (retired) | imageConfig | ✖ | ✖ | ✖ | **model upgrade needed** |
+| internal caller C | TS | 3-pro-image-preview | imageConfig | ✖ | n/a | classified errors | OK (legacy SDK) |
+| internal caller D | TS | dual: 3-pro / 2.5-flash / 2.0-exp | imageConfig | ✖ | ✅ | reprompt | OK; drop 2.0-exp path |
+| internal caller E | TS | 3-pro-image-preview | imageConfig | ✖ | n/a | retry only | OK |
 
 Legend: "n/a" = single-image-by-design. The TS callers are **not** being merged
 into the Python core (they are compiled into MCP servers / app runtimes and a

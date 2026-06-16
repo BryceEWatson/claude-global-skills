@@ -25,7 +25,7 @@ All scripts are stdlib-only where possible (`filelock` is the one pinned PyPI de
 
 ## Invocation examples
 
-One runnable command per script. Substitute `<project>` with an absolute path (e.g. `C:/Users/Bryce/Projects/MyProject`).
+One runnable command per script. Substitute `<project>` with an absolute path (e.g. `~/Projects/MyProject`).
 
 ### `register_finding.py` — append a finding at retro end
 
@@ -53,7 +53,7 @@ python ~/.claude/skills/pattern-retrospective/lib/follow_up_check.py \
     --project-root <project>
 ```
 
-Use `--all` to scan every project under `C:/Users/Bryce/Projects/*/reports/_data/retro-findings.jsonl`.
+Use `--all` to scan every project under `~/Projects/*/reports/_data/retro-findings.jsonl`.
 
 ### `repeat_detector.py` — during mining, check a candidate claim
 
@@ -132,7 +132,7 @@ Pipe into `jq`/`grep` for ad-hoc inventory; the script streams JSONL to stdout (
 - **Junction missing at `<project>/.claude/skills/pattern-retrospective`.** The directory junction that exposes this skill inside a project tree can be deleted by an over-eager cleanup. Recreate it (no admin required for junctions on Windows):
 
   ```cmd
-  cmd /c mklink /J <project>\.claude\skills\pattern-retrospective C:\Users\Bryce\.claude\skills\pattern-retrospective
+  cmd /c mklink /J <project>\.claude\skills\pattern-retrospective %USERPROFILE%\.claude\skills\pattern-retrospective
   ```
 
 - **`<project>/reports/_data/retro-findings.jsonl` is corrupt.** Run the recovery helper to diagnose, then either roll back to the most recent backup snapshot or surgically repair a specific line:
@@ -153,4 +153,4 @@ Pipe into `jq`/`grep` for ad-hoc inventory; the script streams JSONL to stdout (
 2. **Multi-machine.** If you run retros on multiple machines, project registries diverge UNLESS the project is git-tracked. Since findings live at `<project>/reports/_data/retro-findings.jsonl`, committing the file makes the registry travel with the project.
 3. **`difflib.SequenceMatcher` catches lexical repeats only.** Semantic repeats with different wording will be missed. Verification step 4 tests this; upgrade path: RapidFuzz → embeddings.
 4. **Append-only.** Use `supersedes` or `follow_up_status: cancelled` to retract; never edit a row in place.
-5. **Cross-project discovery uses convention.** `--scope all` globs `C:/Users/Bryce/Projects/*/reports/_data/retro-findings.jsonl`. Projects outside that path need explicit `--registries path1,path2,...`.
+5. **Cross-project discovery uses convention.** `--scope all` globs `~/Projects/*/reports/_data/retro-findings.jsonl`. Projects outside that path need explicit `--registries path1,path2,...`.

@@ -6,9 +6,9 @@ when_to_use: When retrospecting on prior Claude sessions to extract reusable pat
 
 # Pattern-retrospective workflow
 
-You're producing a study / blog post / handoff / spec / retrospective that draws conclusions from Bryce's past Claude sessions. Apply this rigor before publishing.
+You're producing a study / blog post / handoff / spec / retrospective that draws conclusions from your past Claude sessions. Apply this rigor before publishing.
 
-The chat-arch v2 Rev 3 plan describes the substrate that will eventually automate this. Until that ships (`c:/Users/Bryce/Projects/chat-arch/_planning/chat-arch-v2-rev3-plan.md`), you are the curator, falsifier, and substrate. The outputs you write become the seed data when chat-arch's automation lands — write them so they're machine-readable later.
+A future automation substrate could eventually automate this. Until such a system exists, you are the curator, falsifier, and substrate. Write the outputs so they're machine-readable later, in case that automation lands.
 
 ## §1 — The load-bearing meta-discipline
 
@@ -18,11 +18,11 @@ If you're writing a "handoff to X" / "spec for X" / "improvements to X" / "what 
 
 This applies recursively. When you cite a fact about an external system, verify it the same way you'd verify any other agent's cited claim. "X already does Y" is a falsifiable claim — falsify it before relying on it.
 
-**Why this rule exists:** the May 2026 handoff to chat-arch failed this check. Roughly 60% of its proposed "chat-arch requirements" already existed in the chat-arch codebase — Phase 1's log-location discovery, Phase 3's false-positive filter, Phase 6's external verification, Phase 7's aggregate metrics, and the "MVP pattern-retrospective view" overlap with the Playbook page. None had been audited. See `c:/Users/Bryce/Projects/chat-arch/_planning/handoff-feedback-2026-05-22.md` for the full critique. Don't repeat that.
+**Why this rule exists:** a real handoff once failed this check. Roughly 60% of its proposed requirements for the target system already existed in that system's codebase — log-location discovery, a false-positive filter, external verification, aggregate metrics — none of which had been audited first. Don't repeat that.
 
 ## §2 — Storage map (always search both corpora)
 
-Bryce's transcripts live in two corpora. Searching only one misses ~10× the data.
+Your transcripts live in two corpora. Searching only one misses ~10× the data.
 
 **Corpus 1 — Claude Code CLI:**
 - `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl` (main sessions)
@@ -118,7 +118,7 @@ The May 2026 adversarial-subagent study found:
 
 Without falsification, all four would have shipped as fact.
 
-**Apply the same rigor to your own document.** "X already does Y" is the most-skipped category — the May handoff cited several "chat-arch already does Z" claims that weren't checked. They turned out to be wrong about the existing state of chat-arch.
+**Apply the same rigor to your own document.** "X already does Y" is the most-skipped category — the handoff above cited several "the target already does Z" claims that weren't checked. They turned out to be wrong about the existing state of that system.
 
 ## §7 — Bayesian confidence smoothing
 
@@ -147,7 +147,7 @@ When a pattern correlates with good outcomes:
 - Use a permutation test or Welch's t for any "this pattern → better outcomes" claim
 - Disclose the test in the methodology paragraph
 
-## §9 — Writeup structure (lifted from chat-arch's Playbook surface)
+## §9 — Writeup structure
 
 Every retrospective document carries:
 
@@ -179,14 +179,14 @@ If any answer is "no," the document isn't ready. The recursive falsifier-on-self
 
 ## §11 — Output location
 
-Save outputs into structured locations so they're addressable when chat-arch's automation lands:
+Save outputs into structured locations so they're addressable if automation lands later:
 
 - **Retrospectives / studies** → `research/studies/YYYY-MM-DD_<topic>.md`
 - **Handoffs / specs** → `_planning/<topic>.md` (in the repo of the target system, not this one)
 - **5-tuple extractions** → `research/studies/_data/<study-id>/5-tuples/<timestamp>_<sessionId>.json`
 - **Inventory tables** → `research/studies/_data/<study-id>/inventory.csv` or `.json`
 
-When chat-arch v2 Rev 3 ships, these become seed data. Keep them machine-readable.
+If such automation ships later, these become seed data. Keep them machine-readable.
 
 ## §12 — Self-check: am I being credulous right now?
 
@@ -200,15 +200,15 @@ If a document feels like it's writing itself faster than you can verify its clai
 
 Slow down. Run §6 falsifier on your own draft. Audit any external systems mentioned in §1. Re-check the math. Confident-and-clean is not the same as correct.
 
-## §13 — Connection to chat-arch v2 Rev 3
+## §13 — Connection to a future automation substrate
 
-This workflow is what chat-arch v2 Rev 3 (`c:/Users/Bryce/Projects/chat-arch/_planning/chat-arch-v2-rev3-plan.md`) will eventually automate. Until that ships:
+This workflow is what a future automation substrate could eventually automate. Until then:
 
 - You are the **curator** — deciding what's worth retrospecting
 - You are the **falsifier** — verifying citations
 - You are the **substrate** — your written outputs are the durable record
 
-When chat-arch v2 Rev 3 lands, the curator-agent + falsifier-agent + provenance-tagged Narrative entity will absorb these responsibilities. Until then, the discipline is yours to enforce manually. Write outputs in a shape that maps cleanly to the future substrate (the 5-tuple structure in §5 was designed for this).
+When such a substrate lands, a curator-agent + falsifier-agent + provenance-tagged record could absorb these responsibilities. Until then, the discipline is yours to enforce manually. Write outputs in a shape that maps cleanly to a future substrate (the 5-tuple structure in §5 was designed for this).
 
 ## §14 — Substep contracts (the "stop reinventing" answer):
 

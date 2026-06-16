@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  node:
+    name: Node tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run node tests
+        run: node --test review-loop/*.test.cjs chat-arch-thrash-detect/*.test.cjs
+      - name: Syntax-check every tracked .cjs
+        run: |
+          for f in $(git ls-files '*.cjs'); do
+            echo "node --check $f"
+            node --check "$f"
+          done
+
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run gemini-image unit tests
+        run: python -m unittest discover -s gemini-image/tests -p 'test_*.py'
+      - name: Run krippendorff_alpha self-test
+        run: python pattern-retrospective/lib/krippendorff_alpha.py --test
+      - name: Compile-check every tracked .py
+        run: python -m py_compile $(git ls-files '*.py')

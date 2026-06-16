@@ -30,7 +30,7 @@ from typing import Iterable
 
 NEAR_DUPLICATE_THRESHOLD_DEFAULT = 0.85
 CANDIDATE_THRESHOLD = 0.70
-CONVENTION_GLOB = "C:/Users/Bryce/Projects/*/reports/_data/retro-findings.jsonl"
+CONVENTION_GLOB = str(Path.home() / "Projects" / "*" / "reports" / "_data" / "retro-findings.jsonl")
 REGISTRY_RELPATH = ("reports", "_data", "retro-findings.jsonl")
 CLAIM_TRUNCATE = 120
 

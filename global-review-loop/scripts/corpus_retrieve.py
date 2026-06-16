@@ -717,7 +717,7 @@ def parse_args(argv):
     p = argparse.ArgumentParser(prog="corpus_retrieve.py")
     p.add_argument("--since", default=None, help="YYYY-MM-DD lower bound on last-activity")
     p.add_argument("--until", default=None, help="YYYY-MM-DD upper bound (turn-level)")
-    p.add_argument("--registry", default="C:/Users/Bryce/Projects/Command/registry.json")
+    p.add_argument("--registry", default=str(Path.home() / "Projects" / "Command" / "registry.json"))
     p.add_argument("--project", default=None, help="restrict to one projectId")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--turns", action="store_true")

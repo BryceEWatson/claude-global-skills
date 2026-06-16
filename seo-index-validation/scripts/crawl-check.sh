@@ -2,7 +2,7 @@
 # crawl-check.sh - headless crawl/index hygiene probe for a deployed site.
 #
 # Usage:   bash crawl-check.sh <domain-or-url> [extra-path ...]
-# Example: bash crawl-check.sh plumagedispatch.com
+# Example: bash crawl-check.sh example.com
 #          bash crawl-check.sh https://example.com /pricing /docs/intro
 #
 # No authentication is needed for the HTTP checks. If GSC_ACCESS_TOKEN is set

@@ -56,7 +56,7 @@ CLI transcripts live at (Windows):
 %USERPROFILE%\.claude\projects\<project-slug>\<session-id>.jsonl
 ```
 
-Where `<project-slug>` is the working directory path with path separators replaced by dashes (e.g., `c--Users-Bryce-Projects-MyApp`). These use the same JSONL schema as Cowork transcripts.
+Where `<project-slug>` is the working directory path with path separators replaced by dashes (e.g., `c--Users-you-Projects-MyApp`). These use the same JSONL schema as Cowork transcripts.
 
 ### Platform Detection
 
@@ -436,7 +436,7 @@ This lives in the project's `.claude/` directory (not the user's `~/.claude/`) b
 ```json
 {
   "version": 1,
-  "project": "ShopForge",
+  "project": "MyProject",
   "runs": [
     {
       "date": "2026-03-17",
@@ -454,7 +454,7 @@ This lives in the project's `.claude/` directory (not the user's `~/.claude/`) b
       "first_seen": "2026-03-17",
       "last_seen": "2026-03-17",
       "session_count": 3,
-      "action_taken": "Added to post-next-pin/SKILL.md; propagated to compositor and publish-v2 skills",
+      "action_taken": "Added rule to CLAUDE.md; propagated to related skills",
       "action_date": "2026-03-18",
       "notes": "Recurrence should drop to zero — monitor in next run",
       "quotes": [
@@ -581,7 +581,7 @@ After each run, present the user with new and persistent findings for triage:
 
 ```
 New findings to triage:
-  1. [A] Pinterest board name validation (3 sessions)  →  action / acknowledge / accept / defer
+  1. [A] Input validation rule (3 sessions)  →  action / acknowledge / accept / defer
   2. [C] QA skill timeout on large packs (2 sessions)  →  action / acknowledge / accept / defer
 
 Persistent findings (action didn't resolve):
@@ -595,7 +595,7 @@ The user's triage choices update the ledger immediately. This is the mechanism t
 
 ## Seeding the Ledger from an Existing Report
 
-If there's already a narrative analysis report but no ledger (as is the case for ShopForge right now), Phase 0 should detect this:
+If there's already a narrative analysis report but no ledger (as is sometimes the case), Phase 0 should detect this:
 
 1. Look for `research/studies/*_narrative-analysis.md` files
 2. If found but no ledger exists, offer to **seed the ledger** from the report

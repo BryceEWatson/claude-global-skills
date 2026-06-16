@@ -9,7 +9,7 @@ allowed-tools: Bash, Read, Grep, Glob, Write, TodoWrite
 Close out a session with an evidence-grounded record — and, **when work is still in flight**, hand off
 so a fresh session can pick up with zero loss. Two intents, one flow: *ending* always produces the
 record; *handing off* (the mid-flight mode) adds the exact resumable state + a copy-pasteable
-continuation prompt **for the next session (you, with an empty context window) and for Bryce**.
+continuation prompt **for the next session (you, with an empty context window) and for the human operator**.
 Optimize for *truth and resumability*, not for sounding complete.
 
 ## Operating principle: ground in artifacts, never in memory alone
@@ -28,7 +28,7 @@ first**, then narrate. This is what makes the handoff *safe*.
 ## Step 2 — Synthesize a DYNAMIC summary
 
 Include only the sections that apply to *this* session (a design session, a debugging session, and a
-research session produce different shapes). Always tag epistemics — this mirrors the operator's
+research session produce different shapes). Always tag epistemics — this mirrors a
 verify-first standard.
 
 - **Session arc** — 2-4 sentences: what this session was, start to now.

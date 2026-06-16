@@ -1,0 +1,90 @@
+name: Bug report
+description: Report a defect in a skill or its tooling.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please fill out the fields below so it can be reproduced quickly.
+
+        **⚠️ Do NOT paste raw chat transcripts or API keys — redact before filing.**
+        Several skills mine your private local Claude history. Issues are public — strip secrets
+        (tokens, keys), file paths that reveal private info, and verbatim conversation logs before
+        you submit. For a security or privacy vulnerability, do **not** open an issue — see SECURITY.md.
+
+  - type: dropdown
+    id: skill
+    attributes:
+      label: Which skill?
+      description: The skill the bug is in. Pick "tooling / scripts" for sync.py, hooks, or repo plumbing.
+      options:
+        - chat-arch-thrash-detect
+        - chat-history-search
+        - gemini-image
+        - global-review-loop
+        - pattern-retrospective
+        - review-loop
+        - seo-index-validation
+        - session-end
+        - session-pickup
+        - transcript-analysis
+        - weekly-work-log
+        - tooling / scripts (sync.py, hooks, repo plumbing)
+        - other / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: corpus
+    attributes:
+      label: Which corpus?
+      description: >
+        For history-mining skills, which Claude history corpus were you running against?
+        Choose "n/a" if the bug is unrelated to chat history.
+      options:
+        - CLI (Claude Code)
+        - Cowork (Claude Desktop local-agent-mode)
+        - n/a
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How can someone else trigger this? Include the exact command or skill invocation.
+      placeholder: |
+        1. Set CLAUDE_GLOBAL_SKILLS_REPO=...
+        2. Run python scripts/sync.py --deploy
+        3. Invoke /<skill> with ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Paste error output here (redacted — no keys or transcripts).
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python and Node versions, and how you installed the skills.
+      placeholder: |
+        OS: Windows 11 / macOS 14 / Ubuntu 24.04
+        Python: 3.12.x
+        Node: 20.x
+    validations:
+      required: false

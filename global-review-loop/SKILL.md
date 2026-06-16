@@ -1,7 +1,7 @@
 ---
 name: global-review-loop
 description: >-
-  Mine ALL of Bryce's local Claude history across EVERY project (both corpora —
+  Mine ALL of your local Claude history across EVERY project (both corpora —
   Claude Code CLI and Cowork local-agent-mode) for operator friction that recurs
   across MULTIPLE projects, then propose GLOBAL ~/.claude leverage (a CLAUDE.md
   rule, a new/edited global skill, a memory, or a settings hook) to fix it — each
@@ -99,7 +99,7 @@ that this skill cannot perform itself.
 
 ## Helpers (self-contained Python — stdlib + two pip deps; NO Command/chat-arch TS imported)
 
-All under `<SKILL_ROOT>/` = `C:/Users/Bryce/.claude/skills/global-review-loop/`.
+All under `<SKILL_ROOT>/` = `~/.claude/skills/global-review-loop/`.
 
 | Helper | Role | When |
 |---|---|---|
@@ -160,7 +160,7 @@ line. The others are stdlib only.
 > TypeScript — the skill must run with just `python` on a machine that has no
 > Node/Command checkout. Canonical schema source to keep the Python shapes in
 > sync with (copy shapes, do not import):
-> `C:/Users/Bryce/Projects/chat-arch/packages/schema/src/{correction,applied-improvement,upgrade-outcome}.ts`.
+> `~/Projects/chat-arch/packages/schema/src/{correction,applied-improvement,upgrade-outcome}.ts`.
 
 ---
 
@@ -204,7 +204,7 @@ Parse from the slash-command arguments (all optional, all have defaults):
 
 - `--since <YYYY-MM-DD>` — corpus lower bound on session last-activity. Default: 90 days ago.
 - `--min-projects <N>` — distinct-project promotion floor. Default `2`.
-- `--registry <path>` — default `C:/Users/Bryce/Projects/Command/registry.json`.
+- `--registry <path>` — default `~/Projects/Command/registry.json`.
 - `--project <id>` — restrict the corpus pass to one project (debugging; the
   promotion rule then can't fire — used only to inspect attribution).
 - `--max-iter <n>` — claim-loop iteration cap. Default `3`.
@@ -239,10 +239,10 @@ filter), and `command-sessions.mjs` (the `MACHINE_PREFIXES` automation classifie
 
 ```bash
 python <SKILL_ROOT>/scripts/corpus_retrieve.py --since <YYYY-MM-DD> \
-  --registry C:/Users/Bryce/Projects/Command/registry.json \
+  --registry ~/Projects/Command/registry.json \
   --sessions --stats --out <SKILL_ROOT>/.local-state/runs/<id>/sessions.ndjson
 python <SKILL_ROOT>/scripts/corpus_retrieve.py --since <YYYY-MM-DD> \
-  --registry C:/Users/Bryce/Projects/Command/registry.json \
+  --registry ~/Projects/Command/registry.json \
   --turns --stats --out <SKILL_ROOT>/.local-state/runs/<id>/turns.ndjson
 ```
 
@@ -504,7 +504,7 @@ NOVEL verdict.
 
 > **/signal-scan handoff requires the Command checkout.** Several places suggest
 > handing a 1-project cluster back to `/signal-scan`. `/signal-scan` is a
-> **Command-repo skill** invoked from within `C:/Users/Bryce/Projects/Command`;
+> **Command-repo skill** invoked from within `~/Projects/Command`;
 > it does not exist on a machine with no Command checkout. On such a machine the
 > correct behavior is to **report** the 1-project clusters (and their suggested
 > home) in the end-of-run summary, not to promise a handoff target that is absent.
@@ -856,7 +856,7 @@ verbatim and wraps it with the cross-project evidence and lifecycle this skill a
   "firstSeen": 1733000000000, "lastSeen": 1734000000000,
   "confidence": 0.71,                              // smoothed s/(s+c+2); never "always" from one hit
   "evidence": [                                     // >=2 DISTINCT path-attributed projects, hard-required
-    { "projectId": "shopforge",     "attribution": "path", "text": "<verbatim operator turn>", "sourceRef": "<sessionId>#<turn>", "provenance": "measured" },
+    { "projectId": "example-project", "attribution": "path", "text": "<verbatim operator turn>", "sourceRef": "<sessionId>#<turn>", "provenance": "measured" },
     { "projectId": "signal-engine", "attribution": "path", "text": "<verbatim operator turn>", "sourceRef": "<sessionId>#<turn>", "provenance": "measured" }
   ],
   "proposedUpgrade": {                              // chat-arch ProposedUpgrade, verbatim

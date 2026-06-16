@@ -1,103 +1,91 @@
 # claude-global-skills
 
-Version-controlled source for **global `~/.claude/skills/`** skills — the
-cross-project, machine-wide skills that are deployed to `~/.claude/skills/` and
-must run on any machine with just `python` (no per-project checkout).
+A curated collection of [Claude Code](https://claude.com/claude-code) **skills** —
+a multi-agent code-review loop, exhaustive local chat-history search, an
+evidence-grounded session end/resume pair, Gemini image generation, and rigorous
+transcript retrospectives — that run **machine-wide with nothing but `python` and
+`node`**. No per-project install: drop a skill into `~/.claude/skills/` and invoke
+it as a slash command in any session.
 
-> Deploy is a copy step: the canonical source lives here; the live copy lives at
-> `~/.claude/skills/<name>/`. This repo is the review surface, not the runtime.
+These are global (`~/.claude/skills/`) skills, version-controlled here so they can
+be reviewed, shared, and deployed to a fresh machine. The repo is the source of
+truth; the live copy under `~/.claude/skills/<name>/` is a deployed copy.
+
+## Quickstart
+
+Install a single skill by copying its directory into your Claude Code skills folder:
+
+```bash
+git clone https://github.com/BryceEWatson/claude-global-skills
+cp -r claude-global-skills/review-loop ~/.claude/skills/
+```
+
+Then invoke it in any Claude Code session:
+
+```
+/review-loop
+```
+
+That's it for prompt-only skills. A few skills also ship an installer (they wire a
+hook into `~/.claude/settings.json`) — run `node ~/.claude/skills/<name>/install.cjs`
+after copying. See each skill's section below.
 
 ## Skills
 
+### Core — portable, useful for anyone
+
 | Skill | What it does |
 |---|---|
-| [`global-review-loop`](global-review-loop/) | Mines all local Claude history across every project (both corpora) for operator friction that recurs across **multiple** projects, then proposes the smallest global `~/.claude` change to fix it — each proposal reconciled against what already ships globally and self-validated by an adversarial `/review-loop --mode claim` pass. Proposes only; never writes `~/.claude` itself. |
-| [`review-loop`](review-loop/) | Multi-agent review team over the session's work + an execution-grounded lint/test/build check, validated through a falsifier stage and re-reviewed until clean or budget hits; records a commit-pinned verdict on the PR. Ships its Stop-hook + install/uninstall machinery. |
-| [`chat-history-search`](chat-history-search/) | Exhaustive search across ALL local Claude chat history (Cowork + Claude Code CLI) — find prompts, recover conversations, inventory pattern usage, audit prior work; knows every log location and false-positive gotcha. |
-| [`pattern-retrospective`](pattern-retrospective/) | Rigorous pattern-retrospective analysis of Claude transcripts: target-system audit before specifying requirements, streaming JSONL parse, 5-tuple extraction with provenance, self-falsification, Bayesian confidence. Ships `lib/` helpers. |
-| [`transcript-analysis`](transcript-analysis/) | Single-project Cowork transcript miner → proposes that project's `CLAUDE.md` candidates. (The single-project sibling of `global-review-loop`.) |
-| [`session-end`](session-end/) | Close out a session with an evidence-grounded record (decisions, claims + verification, assumptions, artifacts, reversals); when mid-flight, also captures resumable state + a ready-to-paste continuation prompt. |
-| [`session-handoff`](session-handoff/) | Alias of `session-end` (renamed); routes old muscle memory to the handoff (mid-flight) mode. |
-| [`session-pickup`](session-pickup/) | Inverse of `session-end`: rehydrate a continued session from the latest handoff, reconciled against current git/file state before acting. |
-| [`chat-arch-thrash-detect`](chat-arch-thrash-detect/) | Calibration-gated PostToolUse hook that nudges on Edit-thrash / Read-loop / Test-loop / Tool-flail patterns. Hook host (not user-invokable); ships its install machinery. |
+| [`review-loop`](review-loop/) | Dispatches a multi-agent review team over your session's diff, runs an execution-grounded lint/test/build check, validates each finding through a falsifier stage, and posts a commit-pinned verdict on the PR. Ships a Stop-hook + installer. |
+| [`gemini-image`](gemini-image/) | Generate and edit images via Google's Gemini API from one zero-dependency Python CLI — reference-image input, multi-image output, safety-block diagnostics, best-available-model selection. |
+| [`chat-history-search`](chat-history-search/) | Exhaustively search your local Claude history across both corpora (Claude Code CLI + Cowork/Desktop) — knows every log location and the false-positive gotchas (task-notifications, TodoWrite items, tool results) that trip up naive grep. |
+| [`pattern-retrospective`](pattern-retrospective/) | Mine your transcripts for recurring patterns with real rigor: audit-the-target-first discipline, streaming JSONL parse, 5-tuple extraction with provenance, self-falsification, and Krippendorff-α inter-rater checks. |
+| [`session-end`](session-end/) | Close out a session into an evidence-grounded record (decisions, claims + verification, assumptions, artifacts, reversals); mid-flight, also emits a ready-to-paste continuation prompt. |
+| [`session-pickup`](session-pickup/) | The inverse of `session-end`: rehydrate a continued session from the latest handoff, reconciled against current git/file state before acting. |
 
-## Privacy
+### Personal examples — wired to the author's setup; adapt before use
 
-These skills mine **verbatim cross-project operator turns** — private chat. That
-data is written only under each skill's untracked `.local-state/` (git-ignored
-here) and is routed through a fail-closed privacy guard
-(`lib/_guards.assert_safe_out`) so it can never land in a tracked tree or in
-`~/.claude` config. Never commit anything under `.local-state/`.
+These show real, working patterns but reference the author's own projects, sites,
+or companion skills. Read them as reference implementations and adjust the paths,
+domains, and assumptions to yours.
 
-## Keeping the repo in sync
+| Skill | What it does |
+|---|---|
+| [`transcript-analysis`](transcript-analysis/) | Single-project transcript miner → proposes that project's `CLAUDE.md` candidates. The single-project sibling of `global-review-loop`. |
+| [`seo-index-validation`](seo-index-validation/) | Probe a deployed site's crawl/index health (status codes, redirects, soft-404, sitemap, GSC) and diagnose why pages aren't indexed. A no-auth `bash`+`curl` script plus a playbook. |
+| [`global-review-loop`](global-review-loop/) | Mine your whole fleet's history for friction that recurs across projects, then propose global `~/.claude` changes — reconciled against what already ships and self-validated by an adversarial claim loop. (Wired to a project registry; see its SKILL.md.) |
+| [`chat-arch-thrash-detect`](chat-arch-thrash-detect/) | A `PostToolUse` hook that nudges when a session falls into edit-thrash / read-loop / test-loop / tool-flail spirals. Hook host (not slash-invoked); ships its installer. |
+| [`weekly-work-log`](weekly-work-log/) | Build a public weekly work-log page from session-end handoffs + git, with every number re-verified. Wired to the author's site as a worked example. |
 
-Model: **live-authoritative + capture.** Skills are edited where they run
-(`~/.claude/skills/<name>/`); this repo is the durable, reviewed mirror. Changes
-flow **live → repo** (capture) as reviewed PRs; the reverse (**repo → live**,
-deploy) is the secondary path for a fresh machine or a rollback.
+> `session-handoff` is a thin alias that routes to `session-end` (the skill was
+> renamed); `/session-handoff` still works if it's installed.
 
-`scripts/sync.py` is the engine (stdlib-only; never copies `.local-state/`,
-`__pycache__`, `*.pyc`; line-ending-insensitive so a git `autocrlf` working tree
-doesn't show false drift):
+## Privacy & safety
 
-```bash
-python scripts/sync.py --check     # report drift live ↔ repo (read-only; exit 3 if drift)
-python scripts/sync.py --capture   # copy live → repo working tree + cruft/secret pre-scan
-                                   # (leaves git add/commit/PR to you, so it lands as a reviewed PR)
-python scripts/sync.py --deploy    # copy repo → live (fresh machine / rollback; preserves live .local-state/)
-```
+Several skills (`chat-history-search`, `transcript-analysis`,
+`pattern-retrospective`, `global-review-loop`) read your **private local Claude
+chat history**. That data is written only under each skill's git-ignored
+`.local-state/`, behind a fail-closed guard that refuses to write into your
+`~/.claude` config or any git working tree — so mined data can't land in a tracked
+or published tree. Skills also run as executable code (some install hooks), so a
+skill is a code-execution surface. **Read [`SECURITY.md`](SECURITY.md) before
+installing or contributing**, and review a skill's code before you deploy it.
 
-After `--capture`, review the diff, commit on a `sync/…` branch, open a PR, and run
-`/review-loop` for the verdict — same discipline as any change here.
+## How this repo is maintained
 
-**Drift-detector hook.** `hooks/skills_drift_hook.py` is a PostToolUse hook: after
-you edit a file under `~/.claude/skills/`, it runs `sync.py --check` and, if that
-skill has drifted from the repo, prints a one-line stderr nudge to capture it.
-Non-blocking (always exits 0). Install by adding to `~/.claude/settings.json`:
+Skills are edited where they run (`~/.claude/skills/<name>/`) and captured back here
+as reviewed PRs; deploying the reverse direction (`repo → live`) sets up a fresh
+machine. The engine is `scripts/sync.py` (stdlib-only). Contributors don't need the
+maintainer's live tree — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
+outside-contributor path (`CLAUDE_GLOBAL_SKILLS_REPO` + `sync.py --deploy`), the
+test commands, and the merge gate.
 
-```jsonc
-{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [
-          { "type": "command",
-            "command": "python \"C:/Users/Bryce/Projects/claude-global-skills/hooks/skills_drift_hook.py\"" }
-        ]
-      }
-    ]
-  }
-}
-```
+## Documentation
 
-Silence it with `CLAUDE_SKILLS_DRIFT_HOOK=0`; point it at a non-default checkout
-with `CLAUDE_GLOBAL_SKILLS_REPO=<path>`.
-
-## Enabling the review-loop Stop hook
-
-`review-loop` ships its own **Stop hook** (`review-loop/stop-hook.cjs`) plus an
-idempotent installer — so the hook is shared from this repo, not hand-wired.
-After the skill is deployed (`sync.py --deploy`, or on the machine where it
-already lives), wire it into `~/.claude/settings.json`:
-
-```bash
-node ~/.claude/skills/review-loop/install.cjs    # enable  (bakes an absolute path; strips any legacy entry)
-node ~/.claude/skills/review-loop/uninstall.cjs  # disable (surgical removal; preserves unrelated hooks)
-```
-
-The installer resolves an **absolute** path via `os.homedir()` at install time, so
-the entry is correct on any machine — Claude Code's shell-form hooks don't reliably
-expand `${HOME}` on Windows, which would otherwise leave the hook silently dead.
-
-Once enabled, the hook is a cheap **always-on gate**: on every session stop it does
-a no-LLM check and only escalates to the review loop when the change warrants it
-(skips docs/handoffs/scratch-only and already-reviewed diffs), logging every
-decision to `review-loop/.local-state/hook.log`. Controls:
-
-- skip one run: `touch ~/.claude/skills/review-loop/.skip-next`
-- opt a repo out: `<repo>/.claude/review-loop.disabled`
-- tune what counts as reviewable: `<repo>/.claude/review-loop.code-exts`, `…/review-loop.plan-paths`
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to add or change a skill, run the tests, and the review gate
+- [`SKILL-SPEC.md`](SKILL-SPEC.md) — the `SKILL.md` contract (frontmatter, directory layout, dependency + privacy rules)
+- [`SECURITY.md`](SECURITY.md) — data-handling model, secret scanning, and how to report a vulnerability
+- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) · [`CHANGELOG.md`](CHANGELOG.md)
 
 ## License
 

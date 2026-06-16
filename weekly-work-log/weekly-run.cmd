@@ -4,7 +4,7 @@ REM Discovers last week's handoffs, refreshes + verifies the data, and opens a
 REM review PR if the committed data changed. NEVER pushes main, never deploys.
 REM Assumes the repo is on a clean main. Logs to .local-state\weekly.log.
 setlocal
-set "REPO=C:\Users\Bryce\Projects\brycewatson.com"
+set "REPO=%USERPROFILE%\Projects\brycewatson.com"
 set "STATE=%USERPROFILE%\.claude\skills\weekly-work-log\.local-state"
 set "LOG=%STATE%\weekly.log"
 if not exist "%STATE%" mkdir "%STATE%"

@@ -2,7 +2,7 @@
 """cowork_filter.py — corpus enumeration + line-shape filter for pattern-retrospective.
 
 Mirrors the ``chat-history-search`` SKILL.md §3 line-shape filter rules so retros do not
-re-invent it (the May 2026 ShopForge retro wrote six bespoke extractors before this helper
+re-invent it (a real retro wrote six bespoke extractors before this helper
 existed). Programmatic use only — emits one JSONL record per kept user prompt on stdout.
 
 This is what pattern-retrospective's SKILL.md §14 references for "corpus enumeration +

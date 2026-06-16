@@ -11,7 +11,7 @@ Registry resolution precedence:
     3. --project-root <path>                  (single project)
     4. (default) nearest ancestor of pwd containing .git/
 
-Convention glob: C:/Users/Bryce/Projects/*/reports/_data/retro-findings.jsonl
+Convention glob: ~/Projects/*/reports/_data/retro-findings.jsonl
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-CONVENTION_GLOB = "C:/Users/Bryce/Projects/*/reports/_data/retro-findings.jsonl"
+CONVENTION_GLOB = str(Path.home() / "Projects" / "*" / "reports" / "_data" / "retro-findings.jsonl")
 REGISTRY_REL = Path("reports") / "_data" / "retro-findings.jsonl"
 
 STATUS_PENDING = "pending"

@@ -1,0 +1,13 @@
+# Optional dependencies — NOT required for normal use.
+#
+# The core of this repo is stdlib-only Python (the Node skills are zero-dependency).
+# Everything below is imported LAZILY, on a single conditional code path, and each
+# import site prints a `pip install --user <pkg>` hint if the package is missing.
+# Install these only if you exercise the specific feature noted in the comment.
+#
+#   pip install --user -r requirements-optional.txt
+#
+# Loose (>=) pins: no known version constraints — any reasonably recent release works.
+
+filelock>=3.0   # only for per-file locking in global-review-loop/lib/ledger_store.py and pattern-retrospective/lib/register_finding.py
+anthropic>=0.40 # only for the dual-LLM inter-rater path in pattern-retrospective/lib/dual_llm_coder.py

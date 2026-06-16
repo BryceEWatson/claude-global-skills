@@ -107,7 +107,7 @@ A newer *flash* model never displaces a GA *pro* one (newer ≠ higher fidelity)
   current production callers and accepted by the live API. The newer
   `responseFormat.image` shape is tracked as a future migration in
   [`SPEC.md`](SPEC.md), which is the canonical contract this skill and the
-  project-specific TypeScript callers (ShopForge, ShopSmith, shopforge_v4) all
+  project-specific TypeScript callers all
   conform to.
 - Per-project business logic (brand denylists, print-spec validation, Sharp
   compositing, pack rules) stays in those projects — this core only does correct

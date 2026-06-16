@@ -50,7 +50,7 @@ _SECRET_RE = re.compile(
 # (~/.claude paths are fine; a hardcoded OTHER project under Projects/ is a smell).
 # Matches forward-slash, backslash, AND WSL (/mnt/c/) forms on this Win11+WSL2 setup.
 _PROJECT_PATH_RE = re.compile(
-    r"(?:[Cc]:[\\/]|/mnt/c/)Users[\\/]Bryce[\\/]Projects[\\/](?!\*)[A-Za-z0-9._-]+"
+    r"(?:[Cc]:[\\/]|/mnt/c/)Users[\\/][^\\/]+[\\/]Projects[\\/](?!\*)[A-Za-z0-9._-]+"
 )
 _CRUFT_NAME_RE = re.compile(r"(^|/)seed_.*\.py$|(^|/)_tmp|(^|/)scratch")
 

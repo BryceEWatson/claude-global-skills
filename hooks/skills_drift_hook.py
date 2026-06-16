@@ -22,7 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-DEFAULT_REPO = "C:/Users/Bryce/Projects/claude-global-skills"
+DEFAULT_REPO = str(Path.home() / "Projects" / "claude-global-skills")
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 IN_SYNC_EXIT = 0  # scripts/sync.py --check: 0=in-sync, 3=drift, 2=env-error, other=error
 
