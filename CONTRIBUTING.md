@@ -59,7 +59,7 @@ Tests are install-free (no `pip install`, no `npm install`).
 
 ```bash
 # Node (zero-dependency)
-node --test review-loop/*.test.cjs chat-arch-thrash-detect/*.test.cjs
+node --test review-loop/*.test.cjs
 
 # Python (stdlib only)
 python -m unittest discover -s gemini-image/tests -p 'test_*.py'

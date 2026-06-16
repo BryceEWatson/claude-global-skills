@@ -7,6 +7,14 @@ This is a deploy-by-copy skills library (each skill is copied to
 `~/.claude/skills/<name>/`) rather than a versioned package, so releases are
 grouped by **date** instead of strict [Semantic Versioning](https://semver.org/).
 
+## [2026-06-16] — Removed chat-arch-thrash-detect
+
+### Removed
+
+- `chat-arch-thrash-detect` — an unused `PostToolUse` thrash-detection hook (it was
+  never installed, enabled, or run). The concept's canonical home is the separate
+  `chat-arch` project; removed here to keep the collection focused.
+
 ## [2026-06-15] — Open-source preparation
 
 First public-release pass: licensing, contributor docs, privacy/security

@@ -19,7 +19,6 @@ body:
       label: Which skill?
       description: The skill the bug is in. Pick "tooling / scripts" for sync.py, hooks, or repo plumbing.
       options:
-        - chat-arch-thrash-detect
         - chat-history-search
         - gemini-image
         - global-review-loop

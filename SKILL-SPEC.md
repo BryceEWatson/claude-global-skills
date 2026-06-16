@@ -172,7 +172,7 @@ these commands directly:
 
 ```bash
 # Node tests (built-in test runner, zero deps)
-node --test review-loop/*.test.cjs chat-arch-thrash-detect/*.test.cjs
+node --test review-loop/*.test.cjs
 
 # Python tests (stdlib unittest)
 python -m unittest discover -s gemini-image/tests -p 'test_*.py'
