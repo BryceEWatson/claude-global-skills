@@ -98,3 +98,11 @@ decision to `review-loop/.local-state/hook.log`. Controls:
 - skip one run: `touch ~/.claude/skills/review-loop/.skip-next`
 - opt a repo out: `<repo>/.claude/review-loop.disabled`
 - tune what counts as reviewable: `<repo>/.claude/review-loop.code-exts`, `…/review-loop.plan-paths`
+
+## License
+
+[MIT](LICENSE) © 2026 Bryce Watson.
+
+These skills run autonomously, and several read your local Claude chat history.
+The license's "AS IS / NO WARRANTY" terms apply — review each skill before you
+install it.

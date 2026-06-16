@@ -11,3 +11,10 @@ __pycache__/
 # (the gemini-image skill reads .env from the cwd or next to its script).
 .env
 **/.env
+
+# Local Claude Code working state — session handoffs, settings, scratch.
+# Handoffs can carry private cross-project context and MUST NEVER be published.
+.claude/
+
+# pytest cache (defense-in-depth; don't rely on pytest's own inner .gitignore)
+.pytest_cache/
