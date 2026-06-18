@@ -260,6 +260,37 @@ check. Findings falsified against the diff; not a human review.
 <!-- review-loop:<headRefOid> --> _Re-run after new commits to refresh._
 ```
 
+## Surface the shipping gap — no-PR nudge (ALWAYS, on a terminal verdict)
+
+"Leave a trail on the PR" only fires when a PR **already exists**. The complementary risk — the one that
+bites silently — is a session that did real, reviewable work and then **stopped without shipping it**: the
+change is uncommitted, or committed but never PR'd, or parked on an unrelated branch. This is especially
+common for **spawned background-task ("chip") sessions**, which finish a self-contained unit of work in a
+worktree and have no memory telling them to open a PR. On a terminal verdict, after the PR-trail step, run
+this cheap read-only check and **surface** (never auto-act on) the gap.
+
+1. **Self-gate.** If an open PR for the branch already exists (the trail step posted to it) → skip. If there
+   are no reviewable changes → skip. This no-op is the common case.
+2. **Detect the shape (read-only)** from `git status --porcelain`, `git rev-parse --abbrev-ref HEAD`,
+   `git log @{u}.. 2>/dev/null` (unpushed commits), and the `gh pr view` result already gathered:
+   - **Uncommitted** — the reviewed changes are still in the working tree (dirty `git status`).
+   - **Committed, no PR** — `HEAD` carries the reviewed change but `gh pr view` found no open PR.
+   - **Unrelated branch** — the current branch's name/topic looks unrelated to the reviewed files (a weak
+     heuristic — surface it for the operator to judge, never assert it).
+3. **Surface in the final summary** (one short block, not a wall): name the shape and recommend the next
+   shipping step — e.g. "recommend committing + opening a PR off the default branch", or "branch has commits
+   but no PR — open one?" — and **offer to do it**, confirmation-gated. Creating a branch / commit / PR is an
+   outbound, judgment-laden action: **never auto-commit, auto-push, or auto-open a PR** without an explicit
+   per-instance confirm. Many sessions intentionally leave WIP — this is a **nudge, not a gate**, and it never
+   blocks the terminal exit.
+4. **Docs-staleness one-liner.** If the reviewed diff changed behavior, a flag/CLI surface, an API, or a
+   config field, add one line: "confirm the docs that describe this (README / skill / `docs/`) are updated —
+   this loop reviewed the diff, not whether docs elsewhere went stale." Skip if the diff is doc-only or
+   clearly doc-neutral.
+
+Keep it to a few lines. A reviewed-clean change that never ships is not "done" — the operator should leave
+the session knowing exactly what remains to ship it.
+
 ## Reconcile the session's handoff (code mode; only the handoff THIS session wrote)
 
 `session-end` writes a handoff (`<toplevel>/.claude/handoffs/<ts>_<slug>.md`) BEFORE this review runs, so its
