@@ -260,6 +260,47 @@ check. Findings falsified against the diff; not a human review.
 <!-- review-loop:<headRefOid> --> _Re-run after new commits to refresh._
 ```
 
+## Reconcile the session's handoff (code mode; only the handoff THIS session wrote)
+
+`session-end` writes a handoff (`<toplevel>/.claude/handoffs/<ts>_<slug>.md`) BEFORE this review runs, so its
+review-status can be stale the instant the verdict lands ("not reviewed yet"), or a load-bearing finding can
+change the risk of its stated next-action. On a **terminal verdict**, reconcile it — run this AFTER "Leave a
+trail on the PR" and BEFORE "State archival", on the still-on-disk state. **Code mode only** (skip in
+plan/claim mode, as claim mode skips the PR trail). Self-gating: most runs wrote no handoff and this no-ops.
+
+1. **Attribute by POSITIVE authorship — never by recency.** Anchor to `git rev-parse --show-toplevel` of the
+   reviewed tree and operate ONLY on `<toplevel>/.claude/handoffs/`. From filenames + `git status` alone (no
+   body reads yet), find the handoff whose FIRST line is `<!-- review-loop:session:<id> -->` with `<id>` equal
+   to THIS run's `--session-id`. If exactly zero match (incl. `unattributed`, or session-end stamped none) OR
+   more than one matches → **skip silently**; this no-op is the expected outcome for most runs. NEVER fall back
+   to "newest by mtime" — concurrent sibling sessions write into the same dir, and editing an unbound handoff
+   corrupts another live session's continuation prompt.
+2. **Idempotency.** If the attributed handoff already carries `<!-- review-loop-reconciled:<diff_sha> -->` for
+   the current reviewed state, skip (already done). Otherwise reconcile and write/replace that single marker in
+   place — never append a second status block.
+3. **Reconcile ONLY what the review changed — surgical, never a rewrite:**
+   - **Correct a now-false review-status line — literal trigger only.** Edit a line ONLY if it literally
+     asserts the work is "unreviewed" / "not yet reviewed" / "untested" / "needs /review-loop" / "review
+     pending" (case-insensitive; this enumerated set, no inference). Replace with per-verdict HONEST wording:
+     clean → "review-loop: clean (`<diff_sha>`)"; exhausted → "review-loop: EXHAUSTED — N unresolved actionable
+     findings (see PR trail)"; stalled → "review-loop: STALLED — no progress, not clean". NEVER write
+     "clean"/"reviewed-OK" on a non-clean verdict. No such literal line → make NO status edit.
+   - **Elevate a load-bearing finding the handoff under-weights — only if it changes the next-action's risk.**
+     Add ONE line to the continuation prompt's next-action or verification-debts, phrased as an OPEN risk, never
+     as resolved: "precondition: review-loop flagged <X> as unresolved (see PR trail) — confirm before
+     <next-action>." Only for a finding already classified load-bearing; non-load-bearing findings never touch
+     the handoff.
+   - **Done-close shape:** if the handoff has no continuation-prompt / next-action / verification-debts section,
+     do NOT inject one — at most fix a literal false status line, else skip. Never fabricate a section the
+     author did not write.
+   - Do not paraphrase, re-voice, or add review jargon to any other line. Cap: ≤2 status edits + ≤1
+     precondition. **Quote each original line you changed** in the final summary.
+4. **Atomic write:** write the full reconciled content to a temp file in the same dir and rename over the
+   original (never a partial in-place stream), so a crash cannot truncate the irreplaceable handoff.
+5. A handoff-only edit is classified nothing-reviewable by the Stop hook's Gate A, so it will not re-arm the
+   loop. (Edge: avoid handoff slugs ending in a plan-glob suffix like `-retrospective` / `-plan` / `-spec`,
+   which would route to plan mode.)
+
 ## State archival
 
 On terminal exit (clean / stalled / exhausted), move `state/<session-id>.json` to `state/archive/<session-id>-<unix-ts>.json` and the `.lock` file is removed. The hook checks for terminal `completion` field and exits 0 if present (per its escape-hatch list).

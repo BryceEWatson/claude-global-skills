@@ -56,6 +56,15 @@ Write the full summary to a file so the next session can READ it rather than tru
 `<project-root>/.claude/handoffs/<UTC-timestamp>_<slug>.md` (create the dir; it's additive/safe).
 If not in a writable repo, skip and emit in-chat only. Never commit, never modify other files.
 
+**Stamp a provenance marker as the very FIRST line of the handoff file** (before the H1), so a later automated
+review can identify the handoff THIS session wrote and never a concurrent sibling session's:
+`<!-- review-loop:session:<session-id> -->`. `<session-id>` is the current Claude Code session id (the UUID for
+this session — e.g. the active transcript's id for this cwd, or a `--session-id` value surfaced in this
+session). If you cannot determine it with confidence, write `<!-- review-loop:session:unattributed -->` — the
+review will then safely SKIP reconciling this handoff rather than risk editing the wrong one. (HTML comments
+are invisible in rendered markdown.) This is the only hook the `/review-loop` "Reconcile the session's handoff"
+step keys on.
+
 ## Step 5 — Emit the continuation prompt (ONLY if work is mid-flight)
 
 **If the session is DONE** — nothing in flight (work shipped, parked, or merged) — skip this step.
