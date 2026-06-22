@@ -39,6 +39,11 @@ an existing item, never touch a hand-authored one):
 
 - Write an `items[]` entry: `id` (the digest session id), `project`, `status`, `tier`,
   `title`, `summary`, and `"drafted": "auto-<today>"`.
+- **`objectiveId` (goal link):** set it to the SPECIFIC registry goal the work advances
+  (read `src/data/objectives.public.json`). Do NOT leave it off for a multi-goal project
+  like Command — without it, every item falls through to that project's catch-all/parent
+  goal and the goal lens collapses to one bucket. Client/private items (Akaya) get NO
+  `objectiveId` (they must stay off `/goals`).
 - **Voice (load-bearing):** plain, professional, **subject-led** titles (lead with the
   work, NOT "I"/"My"); narrative summary; **no em dashes, no " -- "**; **never announce
   the page's own honesty**. The "steer→work→catch" arc is REJECTED — title + summary only.
