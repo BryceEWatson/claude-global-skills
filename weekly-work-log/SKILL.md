@@ -33,6 +33,7 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
 - `<repo>/scripts/draft-work-log-sessions.mjs` — mine the week's interactive sessions → redacted digest.
 - `<repo>/scripts/draft-work-log-proposed.mjs` — ranked `.proposed` distil scaffold (interactive; the builder NEVER reads it).
 - `<repo>/scripts/work-log-harvest-nouns.mjs` — propose redactor denylist additions → gitignored sidecar (count surfaced, never raw nouns).
+- `<repo>/scripts/work-log-validate-source.mjs` — voice/leak gate on the DRAFTED source prose (fails loud on a dash / denylisted token / bad badge / display-role git-leak), run after distillation and before the build (also chained in `pnpm build`).
 - `<repo>/scripts/build-work-log.mjs` — build (re-derive + verify every commit, redact).
 - `<repo>/scripts/work-log-weekly.mjs` — open the review PR (`--advisory <path>` splices the fail-open advisory; never main, never deploy).
 - `<repo>/scripts/lib/work-log-redact.mjs` — shared secret/leak scrubber (the ONE canonical redactor; extend its term lists, never duplicate).
@@ -40,16 +41,18 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
 ## Modes
 
 - **`/weekly-work-log`** (interactive, a human in the loop): the full build — discover → distil candidates → build → preview. New items get WRITTEN here (judgment). The optional `.proposed` scaffold (`draft-work-log-proposed.mjs`) gives you a ranked, mirror-shaped starting point to fill in the public voice; you then MOVE accepted items by hand into `source.json` (the gate).
-- **Unattended (the Sunday-night Claude scheduled task)** — two layers:
-  - **Layer A (deterministic, the backstop):** refresh + git-verify the data and open **exactly one** PR. No new item prose is written unattended. If the generator fails verification, abort with NO PR.
-  - **Layer B (fail-open advisory):** inject judgment that ASSISTS the reviewer (voice/honesty + badge-vs-prose, coverage gaps, badge-vs-git reconciliation, a downgrade-only privacy adjudicator, reversal-coverage) into the PR body, and run the noun-harvester. Any LLM/network/`gh` failure degrades to a single "advisory unavailable" line and never blocks the PR. Advisory may only DOWNGRADE/FLAG.
+- **Unattended (the Sunday-night Claude scheduled task)** — curates the whole week, then opens one PR:
+  - **Curate every session (distillation):** distil EVERY interactive Claude Code session of the week into `source.json` items so the page shows the full week (the original "curate every session" directive, automated). Done in-context from the redacted digest (not subagents). Private/sensitive sessions are **summarized through the privacy filter, not dropped or stubbed** (display roles: Akaya/Personal/ShopForge — generalized to the kind of work, never git-read; "personal finance is fine, we just need iron clad rules"). The drafted prose is gated by `work-log-validate-source.mjs` (fails loud on a dash/leak/bad-badge) + a claim-falsification self-check BEFORE the build.
+  - **Deterministic backstop:** `build-work-log.mjs` git-verifies every number (aborts on any unresolved/non-Bryce commit, so NO PR on bad data). Items the job drafts carry `"drafted": "auto-<date>"`.
+  - **Fail-open advisory:** judgment that ASSISTS the reviewer (badge-vs-prose, coverage gaps, badge-vs-git, a downgrade-only privacy adjudicator, reversal-coverage) spliced into the PR body, plus the noun-harvester (count only). Any LLM/network/`gh` failure → a single "advisory unavailable" line; never blocks the PR. Advisory may only DOWNGRADE/FLAG.
+  - **The PR is the gate:** auto-DRAFT, human-APPROVE. The run never pushes `main`, never deploys, opens exactly one PR.
 - **`--week YYYY-MM-DD`**: backfill a past completed week's archive (see above). Manual only.
 - **`--days N`**: override the window to a rolling N-day scan (manual broader discovery).
 
 ## The full flow (interactive)
 
 1. **Discover** — `node scripts/draft-work-log-from-handoffs.mjs` (and/or `draft-work-log-sessions.mjs`). Scans the week's session-end handoffs / interactive sessions across the allowlisted repos, extracts tagged claims + reversals + cited commits, redacts, writes the gitignored `src/data/work-log.drafts.json` digest.
-2. **Distil** — optionally `node scripts/draft-work-log-proposed.mjs` for a ranked scaffold, then fill each strong, git-verifiable, leak-clean candidate's title/summary in the plain public voice and MOVE it into `source.json`. Conservative: when unsure, leave it out. Obey every rule below.
+2. **Curate every session** — `node scripts/draft-work-log-sessions.mjs` for the redacted per-session digest, then distil EVERY session into `source.json` items in the plain public voice (private/sensitive sessions summarized through the privacy filter, never dropped — see the rules + the unattended prompt `scheduled-task-prompt.md`). `draft-work-log-proposed.mjs` can give a ranked scaffold to fill. Then `node scripts/work-log-validate-source.mjs` (fails loud on a dash/leak/bad-badge) before building. Obey every rule below; accuracy is the floor even for private.
 3. **Build** — `node scripts/build-work-log.mjs`. Re-derives every date/number from git, rewrites commit snippets to the real subject, verifies all cited commits resolve (aborts if any do not), redacts. Writes `work-log.json` (+ snapshot + `goals.json`).
 4. **Preview** — `pnpm dev`, open `http://localhost:4321/weekly-report` (archive index at `/log`, goals at `/goals`).
 5. **Ship** — commit the data files. A merge to `main` deploys via CI. (Unattended: `node scripts/work-log-weekly.mjs --advisory <sidecar>` opens the PR instead of committing to main.)
@@ -87,7 +90,9 @@ The unattended weekly run is a **Claude scheduled task** (`mcp__scheduled-tasks`
 - Never push to `main`; never deploy; only ever open a PR. The unattended run opens **exactly one** PR.
 - Abort (no PR) if the generator fails verification — never open a PR with unverified data.
 - **Advisory is fail-open**: any LLM/network/`gh` failure → a single "advisory unavailable" line; the PR still opens with deterministic data + the human checklist intact. Advisory may only DOWNGRADE/FLAG — never clear-for-publish, never suppress the human leak/voice checklist.
-- The deterministic build NEVER reads the `.proposed` scaffold; the cron NEVER fires `--week` backfill; the harvester's raw nouns NEVER enter the PR body (count only).
-- Reuse the review-loop `--mode claim` engine/rubric verbatim for the badge-vs-prose advisory — read its `agents/claim-*.md` lenses at runtime; do not fork them.
-- Conservative distillation: skip any candidate you cannot stand behind; note the skips in the PR body.
-- The drafts digest, `.proposed` scaffold, and harvester sidecar are gitignored and redacted; never commit them.
+- The cron NEVER fires `--week` backfill; the harvester's raw nouns NEVER enter the PR body (count only).
+- Reuse the review-loop `--mode claim` engine/rubric verbatim for the badge-vs-prose checks — read its `agents/claim-*.md` lenses at runtime; do not fork them.
+- **Curate every session, redacted — not dropped, not stubbed.** Private/sensitive sessions are summarized through the privacy filter (display roles never git-read; client→"Akaya", finances→"Personal"; generalized to the kind of work; accuracy is the hard floor even for private). A session you cannot distil confidently gets the most generic HONEST entry, never a fabricated one.
+- **The drafted prose is gated before it builds:** `work-log-validate-source.mjs` fails loud on a dash/leak/bad-badge/git-leak; the iron-clad redactor + the dist-PII scan are the deterministic backstop; the PR is the human gate. Auto-DRAFT, human-APPROVE — never auto-publish in Bryce's voice.
+- The unattended run writes ONLY `work-log.source.*` (its drafted items) + gitignored sidecars; it NEVER hand-writes `work-log.json` / `reports/*` / `goals.json` (the build does, deterministically), never `main`, never deploy.
+- The drafts digest and harvester sidecar are gitignored and redacted; never commit them.

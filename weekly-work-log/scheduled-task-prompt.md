@@ -5,8 +5,9 @@ This is the self-contained prompt for the Claude scheduled task `weekly-work-log
 NO memory of any prior conversation. Keep this file in sync with the live task; the
 operator copies its contents into `create_scheduled_task({ prompt: ... })`.
 
-The model is **judgment DRAFTS, the human GATES**. You produce a deterministic data
-PR and layer FAIL-OPEN advisory judgment onto its body. You never publish.
+The model is **judgment DRAFTS, the human GATES**. You curate EVERY interactive
+Claude Code session of the week into the page, then open a PR. You never publish:
+the PR is the approval gate (Bryce reviews + merges; CI deploys the merge).
 
 ---
 
@@ -21,61 +22,87 @@ rules exactly. Do these steps in order.
   nothing else, open no PR, and report why. Never commit or stash someone else's work.
 - `git fetch origin` and fast-forward `main` if behind. Do NOT force anything.
 
-## 1. Layer A — deterministic build (the backstop; must run to completion)
-- `node scripts/draft-work-log-from-handoffs.mjs` (refresh the redacted discovery digest).
-- `node scripts/build-work-log.mjs`. If it exits non-zero (a cited commit failed to
-  resolve / verification failed): STOP. Open NO PR. Report the failure. This is the
-  honesty backstop — never open a PR with unverified data.
-- Do NOT pass `--week` (no backfill from the cron — one PR, not N). Do NOT run
-  `draft-work-log-proposed.mjs` (the distil emitter never runs unattended). Do NOT
-  hand-edit `work-log.json`, `reports/*`, or `goals.json` — only the build writes them.
+## 1. Discover (deterministic, redacted, no LLM)
+- `node scripts/draft-work-log-from-handoffs.mjs` (handoff claims/reversals digest).
+- `node scripts/draft-work-log-sessions.mjs` (the per-session digest — the unit of
+  curation). This writes the redacted, bounded `src/data/work-log.drafts.json`: one
+  entry per interactive Claude Code session of the week (id, date, project, repo,
+  `isPrivate`, redacted `userPrompts` steers, `toolCounts`, redacted `candidateCommits`).
+  It is already scrubbed; read ONLY this digest, never raw transcripts.
 
-## 2. Layer B — fail-open advisory (judgment that ASSISTS, never gates)
-Produce advisory notes and write them to the gitignored sidecar
-`src/data/.local-state/advisory.md`. Wrap EACH analysis so a failure in one degrades to
-a one-line "(this check was unavailable)" note rather than aborting. If the WHOLE layer
-fails (model/network/tooling), leave the sidecar empty/absent — step 3 then prints a
-single "advisory unavailable" line. The advisory may only DOWNGRADE or FLAG; it must
-never clear an item for publish or remove the human checklist.
+## 2. Curate EVERY session (the distillation — in-context, NOT subagents)
+Distil **every** session in the digest into `src/data/work-log.source.json` so the page
+shows the whole week. Work in-context (no fan-out subagents — keeps voice + scrub under
+direct control). For each digest session **not already represented** in `source.json`
+(idempotency: match on `primaryCommit`, else session `id` / date+project — never duplicate
+an existing item, never touch a hand-authored one):
 
-Compute, against the freshly built `src/data/work-log.json` + real git/`gh` state:
-- **#2 Voice / honesty + badge-vs-prose.** For each item shown this week, treat its
-  status badge as a CLAIM and try to break it against the item's own prose + the cited
-  commit's real git state. REUSE the review-loop `--mode claim` rubric VERBATIM — read
-  `~/.claude/skills/review-loop/agents/claim-falsification.md` and
-  `~/.claude/skills/review-loop/agents/claim-calibration.md` and apply those lenses; do
-  NOT fork or rewrite them. Flag e.g. a `shipped` badge over prose admitting the proof
-  never ran.
-- **#3 Coverage critic.** `git log` the week's Bryce-authored commits across the featured
-  repos (Command, DemandForge, claude-global-skills, brycewatson.com) and flag notable
-  work that the feed does not represent (the under-reporting blind spot).
-- **#5 Badge-vs-git reconciliation.** For each item's cited commit/PR, check
-  merged / open-PR / closed-unmerged / reverted via `git`/`gh` and flag mismatches.
-  Honor a deliberate tag-not-merge (do not flag intentional non-merges as errors).
-- **#6 Privacy adjudicator.** Read the rendered items for leaks-by-MEANING the literal
-  redactor would miss (a client/niche identifiable by description). Downgrade/flag only;
-  never assert "clear to publish". The deterministic redactor + dist-PII scan remain the
-  real backstop.
-- **#9 Reversal coverage.** If a this-week reversal contradicts a claim that is already
-  PUBLISHED (in committed `work-log.json` / `reports/*.json`), flag the now-stale claim.
-- **#7 Noun harvest.** Run `node scripts/work-log-harvest-nouns.mjs`. Surface ONLY the
-  reported COUNT in the advisory ("N candidate private nouns proposed → sidecar"). NEVER
-  paste the raw candidate nouns into the advisory or the PR body.
+- Write an `items[]` entry: `id` (the digest session id), `project`, `status`, `tier`,
+  `title`, `summary`, and `"drafted": "auto-<today>"`.
+- **Voice (load-bearing):** plain, professional, **subject-led** titles (lead with the
+  work, NOT "I"/"My"); narrative summary; **no em dashes, no " -- "**; **never announce
+  the page's own honesty**. The "steer→work→catch" arc is REJECTED — title + summary only.
+- **Status (honest badge):** `shipped` (built + verified), `in progress`, or
+  `designed, not proven` (machinery exists, no real result yet). Map a handoff `[verified]`
+  claim → shipped; `[assumed]`/`[unverified]` → designed-not-proven. Mixed session → lead
+  with the **frontier** status (the least-finished, framed as the frontier, never a deficit).
+- **Tier:** `headline` for the few proof-moment / most-significant sessions (full
+  badge+summary+detail); `routine` for the rest (compact one-line). Most are routine.
+- **PUBLIC / featured sessions** (Command, DemandForge, claude-global-skills,
+  brycewatson.com): set `primaryCommit` to the session's strongest candidate commit so the
+  build git-verifies it (date derives from the commit). Optionally add `snippets` curated
+  from the digest's steers/commit subjects (verbatim, already redacted).
+- **PRIVATE / sensitive sessions — summarize through the privacy filter, do NOT drop or
+  stub** (the decided requirement: *"Every session should be curated, without exception.
+  Sensitive sessions should be redacted to avoid anything private or embarrassing."* and
+  *"Talking about personal finance is fine, and good for the site content. We just need iron
+  clad rules around it."*). For a display-role project (`Akaya` = the client codename
+  `dropKnowledge`; `Personal` = `Finances`; `ShopForge`): write a generalized entry
+  describing only the KIND of work (e.g. "Built a trustworthy evaluation harness for the
+  question-answering system"; "Worked through personal financial planning"). **Accuracy is
+  the hard floor even here.** NO `primaryCommit`, NO `repo`, NO `snippets.verify` — these
+  repos are NEVER git-read. Use the session `date`. Never name the client, niche, people,
+  product, accounts, amounts, or codenames.
+- **Per-project goal lines:** for any project new to `source.json`, add a `projects[]` entry
+  with a durable `mission` (from the project's CHARTER/README, not one week) + a this-week
+  `frontier` (derived). Display-role projects get a generalized mission too.
 
-Write the sidecar as clearly-labeled advisory markdown (headings per check above, each
-finding one line). Keep it concise.
+Then GATE your own drafting before anything builds:
+- `node scripts/work-log-validate-source.mjs` — it fails LOUDLY on an em/en dash, a " -- "
+  in authored prose, a denylisted token surviving your prose, a bad status/tier, or a
+  display-role item carrying a git reference. FIX every flagged item and re-run until clean.
+- Claim-falsification self-check: read `~/.claude/skills/review-loop/agents/claim-falsification.md`
+  and `claim-calibration.md` and apply those lenses VERBATIM (do not fork them) to each
+  drafted item — does the badge overstate the evidence? Downgrade any overstated badge.
 
-## 3. Open exactly ONE PR (mandatory — run LAST and unconditionally)
-- Run `node scripts/work-log-weekly.mjs --advisory src/data/.local-state/advisory.md`.
-  This rebuilds + re-verifies, and if the committed data changed, opens ONE PR on a fresh
-  branch (never `main`, never deploy), splicing the advisory into the body (or a single
-  "advisory unavailable" line if the sidecar is missing/empty). If nothing changed, it
-  exits clean with no PR — that is fine.
-- You MUST reach this step even if any Layer-B advisory step failed. The PR is mandatory;
-  the advisory is optional. If `work-log-weekly.mjs` fails for a non-data reason, retry
-  once WITHOUT `--advisory`; the deterministic PR must still be attempted.
+## 3. Build (deterministic backstop; must pass or NO PR)
+- `node scripts/build-work-log.mjs`. It re-derives every date/number from git, verifies
+  every cited commit resolves and is Bryce's (ABORTS otherwise), redacts, and writes
+  `work-log.json` + `reports/<week>.json` + `goals.json`. If it aborts (a commit you cited
+  did not resolve / is not Bryce's), FIX that item (correct or remove the commit) and re-run.
+  If it cannot be made to pass, STOP and open NO PR.
+- Do NOT pass `--week` (no backfill from the cron). Do NOT hand-edit `work-log.json`,
+  `reports/*`, or `goals.json` — only the build writes them.
 
-## 4. Report
-- Report: whether a PR was opened (and its URL) or why not, the build verification result,
-  and which advisory checks ran vs degraded. Do not deploy. Do not merge. Leave `main`
-  untouched. The PR is the human approval gate.
+## 4. Fail-open advisory (judgment that ASSISTS, never gates)
+Write advisory notes to the gitignored `src/data/.local-state/advisory.md`. Wrap each check
+so one failure degrades to a one-line note; if the whole layer fails, leave the sidecar
+empty (step 5 prints a single "advisory unavailable" line). Leak-safe: counts + high-level
+only. The advisory may only DOWNGRADE/FLAG. Now that the feed is populated, these check your
+OWN distillation: #2 badge-vs-prose (reuse the claim lenses), #3 coverage (any session you
+failed to curate), #5 badge-vs-git reconciliation, #6 privacy (leak-by-meaning), #9 reversal
+coverage. Then run `node scripts/work-log-harvest-nouns.mjs` and surface ONLY the count.
+
+## 5. Open exactly ONE PR (mandatory — run LAST and unconditionally)
+- `node scripts/work-log-weekly.mjs --advisory src/data/.local-state/advisory.md`. It
+  rebuilds + re-verifies and, if the committed data changed, opens ONE PR on a fresh branch
+  (never `main`, never deploy), splicing the advisory into the body. The PR carries the
+  curated week + your `drafted`-marked items for Bryce to review and merge.
+- You MUST reach this step even if an advisory step failed. The PR is mandatory; the advisory
+  is optional. If `work-log-weekly.mjs` fails for a non-data reason, retry once WITHOUT
+  `--advisory`.
+
+## 6. Report
+Report: PR opened (URL) or why not; the build verification result; how many sessions were
+curated (public vs private-redacted); which advisory checks ran vs degraded. Do not deploy.
+Do not merge. Leave `main` untouched. The PR is the human approval gate.
