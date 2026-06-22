@@ -17,7 +17,7 @@ Routes: `/weekly-report` (live, current week) · `/weekly-report/<project>` (per
 
 The report always covers the most recently **completed Monday–Sunday week** (a week completes on Sunday). Run on a Sunday night, that is the week that just ended; run any other day, it is the previous full week. Discovery (handoffs + git), the chart, and the per-project metrics all use this same week, resolved by the single shared `resolveWeek()` in `scripts/lib/work-log-sessions.mjs`. It is anchored on the calendar week, never a rolling window walking back from today.
 
-**Backfill (`--week YYYY-MM-DD`)** regenerates a PAST completed week's `/log` archive (snapshot + index + re-aggregated goals) and **leaves the live `work-log.json` untouched**. Any day inside the target week resolves to that whole Mon–Sun window; a future date or the current in-progress week aborts. Backfill is **opt-in / operator-confirmed / capped (≤6 weeks)** and is **never** fired by the scheduled run (the unattended agent always targets the last completed week — one PR, not N).
+**Backfill (`--week YYYY-MM-DD`)** regenerates a PAST completed week's `/log` archive (snapshot + index + re-aggregated goals) and **leaves the live `work-log.json` untouched**. Any day inside the target week resolves to that whole Mon–Sun window; a future date or the current in-progress week aborts. Backfill is **opt-in / operator-confirmed** and regenerates **exactly one completed week per invocation** (blast radius bounded to one PR); it is **never** fired by the scheduled run (the unattended agent always targets the last completed week — one PR, not N).
 
 ## What runs where
 
