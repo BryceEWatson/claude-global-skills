@@ -1,11 +1,11 @@
 # claude-global-skills
 
 A curated collection of [Claude Code](https://claude.com/claude-code) **skills** —
-a multi-agent code-review loop, exhaustive local chat-history search, an
-evidence-grounded session end/resume pair, Gemini image generation, and rigorous
-transcript retrospectives — that run **machine-wide with nothing but `python` and
-`node`**. No per-project install: drop a skill into `~/.claude/skills/` and invoke
-it as a slash command in any session.
+an end-to-end build driver, a multi-agent code-review loop, exhaustive local
+chat-history search, an evidence-grounded session end/resume pair, Gemini image
+generation, and rigorous transcript retrospectives — that run **machine-wide with
+nothing but `python` and `node`**. No per-project install: drop a skill into
+`~/.claude/skills/` and invoke it as a slash command in any session.
 
 These are global (`~/.claude/skills/`) skills, version-controlled here so they can
 be reviewed, shared, and deployed to a fresh machine. The repo is the source of
@@ -37,6 +37,7 @@ after copying. See each skill's section below.
 | Skill | What it does |
 |---|---|
 | [`review-loop`](review-loop/) | Dispatches a multi-agent review team over your session's diff, runs an execution-grounded lint/test/build check, validates each finding through a falsifier stage, and posts a commit-pinned verdict on the PR. Ships a Stop-hook + installer. |
+| [`ship-it`](ship-it/) | Drive one build goal end to end — research → plan → review-the-plan → implement → test → PR → review-the-PR — gating each checkpoint and looping until done. Reviews the plan adversarially before any code is written, gates plan-approval through the operator, exercises the real app, and never silently de-scopes. |
 | [`gemini-image`](gemini-image/) | Generate and edit images via Google's Gemini API from one zero-dependency Python CLI — reference-image input, multi-image output, safety-block diagnostics, best-available-model selection. |
 | [`chat-history-search`](chat-history-search/) | Exhaustively search your local Claude history across both corpora (Claude Code CLI + Cowork/Desktop) — knows every log location and the false-positive gotchas (task-notifications, TodoWrite items, tool results) that trip up naive grep. |
 | [`pattern-retrospective`](pattern-retrospective/) | Mine your transcripts for recurring patterns with real rigor: audit-the-target-first discipline, streaming JSONL parse, 5-tuple extraction with provenance, self-falsification, and Krippendorff-α inter-rater checks. |
