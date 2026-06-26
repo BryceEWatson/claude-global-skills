@@ -4,8 +4,8 @@ A curated collection of [Claude Code](https://claude.com/claude-code) **skills**
 an end-to-end build driver, a multi-agent code-review loop, exhaustive local
 chat-history search, an evidence-grounded session end/resume pair, Gemini image
 generation, and rigorous transcript retrospectives — that run **machine-wide with
-nothing but `python` and `node`**. No per-project install: drop a skill into `~/.claude/skills/` and invoke
-it as a slash command in any session.
+nothing but `python` and `node`**. No per-project install: drop a skill into
+`~/.claude/skills/` and invoke it as a slash command in any session.
 
 These are global (`~/.claude/skills/`) skills, version-controlled here so they can
 be reviewed, shared, and deployed to a fresh machine. The repo is the source of
