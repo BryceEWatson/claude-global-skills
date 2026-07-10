@@ -46,6 +46,7 @@ after copying. See each skill's section below.
 | [`session-end`](session-end/) | Close out a session into an evidence-grounded record (decisions, claims + verification, assumptions, artifacts, reversals); mid-flight, also emits a ready-to-paste continuation prompt. |
 | [`session-pickup`](session-pickup/) | The inverse of `session-end`: rehydrate a continued session from the latest handoff, reconciled against current git/file state before acting. |
 | [`monitor-agent-thread`](monitor-agent-thread/) | Watch a live or recent Claude Code **or** Codex session from the other product via local session logs, with a safe projection that never exposes hidden reasoning, raw tool arguments, signatures, encrypted content, or secrets. The first **dual-target** skill (Claude + Codex). |
+| [`fable-seat`](fable-seat/) | Operating profile for a session running on Fable (`claude-fable-5`): default effort `high` and step DOWN for routine work rather than reaching for `xhigh`, lead task framing with the outcome, keep the prompt cache warm by farming cheap work to a subagent instead of inline-switching the main model, and budget + compact long runs. A genuine no-op on Opus and every non-Fable model; Fable-mechanics guidance, not a superiority claim. |
 
 ### Personal examples — wired to the author's setup; adapt before use
 
