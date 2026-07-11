@@ -38,6 +38,8 @@ jobs:
         run: python -m unittest discover -s gemini-image/tests -p 'test_*.py'
       - name: Run sync engine tests
         run: python -m unittest discover -s scripts/tests -p 'test_*.py'
+      - name: Run session-portal tests
+        run: python -m unittest discover -s session-portal/tests -p 'test_*.py'
       - name: Run monitor-agent-thread tests
         run: python -m unittest discover -s monitor-agent-thread/tests -p 'test_*.py'
       - name: Run drift-hook tests
