@@ -24,10 +24,11 @@ recipient is safely paused, the note simply waits.
 
 A single SQLite database in a user-level directory (`$SESSION_PORTAL_HOME`, default
 `~/.session-portal/portal.db`; override the file with `$SESSION_PORTAL_DB`). It runs in
-**WAL** mode with foreign keys on and a busy timeout, so multiple independent Claude and
-Codex sessions can read and write at once without corruption, and a crashed process can't
-leave a half-written message. There is **no daemon** — every operation opens the DB, does
-its work in a transaction, and closes.
+**WAL** mode with a busy timeout, so multiple independent Claude and Codex sessions can
+read and write at once without corruption. Each composite operation (a message insert plus
+its audit event; a status change plus its lifecycle event) runs inside an explicit
+`BEGIN IMMEDIATE` transaction, so a crash can't leave a row and its audit event split. There
+is **no daemon** — every operation opens the DB, does its work, and closes.
 
 Tables: `sessions`, `messages`, `message_events` (the audit trail), `leases` (per-
 destination single-flight), and `schema_version` (migrations).
@@ -56,6 +57,13 @@ be queued for a session that has not registered yet; a placeholder row holds it 
 recipient checks in.
 
 ## Delivery paths
+
+Only the **Pull** path is exposed as an MCP tool and an admin command; it is the path an
+operator or an agent actually invokes. Push, Claude-resume, and Codex-native are
+library-level adapters (`portal_adapters.py`), callable programmatically and exercised by
+the test suite, provided for a future runtime that wants sender-side delivery. They are
+listed here so the safety rules that bound them are documented, not to imply an operator
+command exists for each.
 
 - **Pull** (primary, safe by construction): the recipient calls `portal_list_inbox` with
   `deliver=true` at one of its own safe boundaries — session-start, prompt-submit, stop,

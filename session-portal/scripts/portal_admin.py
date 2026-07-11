@@ -81,6 +81,11 @@ def cmd_cancel(args) -> int:
         return _out(core.cancel_message(conn, args.message, by=args.by, reason=args.reason))
 
 
+def cmd_fail(args) -> int:
+    with _closing(_conn()) as conn:
+        return _out(core.fail_message(conn, args.message, error=args.error))
+
+
 def cmd_status(args) -> int:
     with _closing(_conn()) as conn:
         return _out(core.get_message_status(conn, args.message))
@@ -183,6 +188,11 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--by")
     c.add_argument("--reason")
     c.set_defaults(func=cmd_cancel)
+
+    f = sub.add_parser("fail")
+    f.add_argument("--message", required=True)
+    f.add_argument("--error", required=True, help="reason the message failed")
+    f.set_defaults(func=cmd_fail)
 
     st = sub.add_parser("status")
     st.add_argument("--message", required=True)

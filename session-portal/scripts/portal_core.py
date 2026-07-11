@@ -22,6 +22,7 @@ stdlib only; Windows-safe.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -29,7 +30,7 @@ import re
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 SCHEMA_VERSION = 1
 VALID_PRODUCTS = ("claude", "codex")
@@ -58,7 +59,8 @@ _LEGAL_TRANSITIONS = {
 # Boundaries at which a recipient may safely PULL its own inbox (it is between turns).
 SAFE_PULL_BOUNDARIES = {"session_start", "prompt_submit", "stop", "command", "heartbeat"}
 # Destination states into which a message may be PUSHED (recipient paused but alive).
-# completed/stale are NOT here — those route through the guarded resume adapter.
+# `completed` routes through the guarded resume adapter; `stale` intentionally waits in the
+# queue until its TTL (closure is unproven, so we neither push nor resume it).
 PUSH_DELIVERABLE_STATES = {"idle", "waiting-for-user"}
 
 MAX_BODY_BYTES = 4096
@@ -319,6 +321,22 @@ def _log_event(conn: sqlite3.Connection, message_id: str, event: str, detail: st
     )
 
 
+@contextlib.contextmanager
+def _atomic(conn: sqlite3.Connection):
+    """Group multiple writes into one all-or-nothing transaction. The connection runs in
+    autocommit (isolation_level=None), so a composite op (a row change + its audit event,
+    or an insert + its 'created' event) would otherwise commit statement-by-statement and a
+    crash could split them. BEGIN IMMEDIATE takes the write lock up front; COMMIT on success,
+    ROLLBACK on error. Not nested — callers wrap a whole op, and helpers inside never wrap."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
+
+
 # --------------------------------------------------------------------------- #
 # Sessions
 # --------------------------------------------------------------------------- #
@@ -401,12 +419,14 @@ def list_sessions(conn: sqlite3.Connection, product: str | None = None,
 # --------------------------------------------------------------------------- #
 # Sending (idempotent)
 # --------------------------------------------------------------------------- #
-def _derive_idempotency_key(source: str, dest: str, body: str, kind: str, authorship: str,
-                            provided: str | None) -> str:
+def _derive_idempotency_key(source: str, dest: str, provided: str | None) -> str:
+    """The stored idempotency identity. A caller-supplied key is SCOPED to (source, dest)
+    so the same natural key (e.g. a task id) reused across different recipients yields
+    DISTINCT messages — a global key would let a send to C collide with an earlier send to
+    B and silently drop C's message (returning B's body). No key -> unique per call."""
     if provided is not None:
         _valid_id(provided, "idempotency_key")
-        return provided
-    # No caller key -> unique per call (distinct legitimate messages are NOT merged).
+        return f"{source}\x1f{dest}\x1f{provided}"
     return "auto-" + os.urandom(16).hex()
 
 
@@ -452,8 +472,7 @@ def send_message(conn: sqlite3.Connection, source_session_id: str, dest_session_
                 and authorship == "agent"):
             raise ValidationError("reversed agent-authored forward rejected (ping-pong guard)")
 
-    key = _derive_idempotency_key(source_session_id, dest_session_id, body, kind, authorship,
-                                  idempotency_key)
+    key = _derive_idempotency_key(source_session_id, dest_session_id, idempotency_key)
     mid = message_id_for(key)
     ts = now()
     expires_at = ts + (ttl_seconds if ttl_seconds is not None else DEFAULT_TTL_SECONDS)
@@ -461,23 +480,27 @@ def send_message(conn: sqlite3.Connection, source_session_id: str, dest_session_
     _ensure_session(conn, dest_session_id)
     _ensure_session(conn, source_session_id)
 
-    cur = conn.execute(
-        """INSERT OR IGNORE INTO messages(message_id, idempotency_key, source_session_id,
-                dest_session_id, dest_product, body, authorship, kind, authorized, status,
-                created_at, updated_at, expires_at, forward_depth, root_message_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (mid, key, source_session_id, dest_session_id, dest_product, body, authorship, kind,
-         1 if authorized else 0, STATUS_QUEUED, ts, ts, expires_at, depth, root),
-    )
-    if cur.rowcount == 0:
+    detail = f"kind={kind} authorship={authorship} authorized={int(authorized)}"
+    if forward_of:
+        detail += f" forward_of={forward_of} depth={depth}"
+    # The message row and its 'created' audit event commit together (or not at all).
+    with _atomic(conn):
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO messages(message_id, idempotency_key, source_session_id,
+                    dest_session_id, dest_product, body, authorship, kind, authorized, status,
+                    created_at, updated_at, expires_at, forward_depth, root_message_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (mid, key, source_session_id, dest_session_id, dest_product, body, authorship, kind,
+             1 if authorized else 0, STATUS_QUEUED, ts, ts, expires_at, depth, root),
+        )
+        inserted = cur.rowcount != 0
+        if inserted:
+            _log_event(conn, mid, "created", detail)
+    if not inserted:
         # Idempotent hit: the message already exists. Return it unchanged.
         existing = get_message_status(conn, mid)
         existing["idempotent_duplicate"] = True
         return existing
-    detail = f"kind={kind} authorship={authorship} authorized={int(authorized)}"
-    if forward_of:
-        detail += f" forward_of={forward_of} depth={depth}"
-    _log_event(conn, mid, "created", detail)
     return get_message_status(conn, mid)
 
 
@@ -536,8 +559,10 @@ def _transition(conn: sqlite3.Connection, row: sqlite3.Row, new_status: str,
         sets.append(f"{k}=?")
         params.append(v)
     params.append(row["message_id"])
-    conn.execute(f"UPDATE messages SET {', '.join(sets)} WHERE message_id=?", params)
-    _log_event(conn, row["message_id"], new_status, event_detail)
+    # The status change and its audit event commit together (or not at all).
+    with _atomic(conn):
+        conn.execute(f"UPDATE messages SET {', '.join(sets)} WHERE message_id=?", params)
+        _log_event(conn, row["message_id"], new_status, event_detail)
 
 
 def expire_due(conn: sqlite3.Connection) -> int:
@@ -584,18 +609,20 @@ def fail_message(conn: sqlite3.Connection, message_id: str, error: str) -> dict:
 # --------------------------------------------------------------------------- #
 # Delivery
 # --------------------------------------------------------------------------- #
-def _deliverable_for_steer(conn: sqlite3.Connection, row: sqlite3.Row) -> None:
-    """A steering message may only be delivered if it was authorized AND the destination
-    session has opted into receiving steering."""
+def _steer_refusal_reason(conn: sqlite3.Connection, row: sqlite3.Row) -> str | None:
+    """Return a reason a steering message may NOT be delivered yet, or None if it may.
+    A steer may deliver only if it was authorized AND the destination opted into steering.
+    This is a SOFT gate: like every other delivery gate it leaves the message queued rather
+    than raising, so one undeliverable steer can never poison a batch inbox pull."""
     if row["kind"] != "steer":
-        return
+        return None
     if not row["authorized"]:
-        raise AuthorizationError("refusing to deliver an unauthorized steering message")
+        return "unauthorized steering message; left queued"
     dest = conn.execute("SELECT accepts_steering FROM sessions WHERE session_id=?",
                         (row["dest_session_id"],)).fetchone()
     if not dest or not dest["accepts_steering"]:
-        raise AuthorizationError(
-            "destination session has not authorized steering; leaving queued")
+        return "destination has not authorized steering; left queued"
+    return None
 
 
 def deliver_one(conn: sqlite3.Connection, message_id: str, *, mode: str, boundary: str | None,
@@ -622,8 +649,15 @@ def deliver_one(conn: sqlite3.Connection, message_id: str, *, mode: str, boundar
         out["refused_reason"] = reason
         return out
 
-    # Authorization gate for steering (raises if unauthorized).
-    _deliverable_for_steer(conn, row)
+    # Steering authorization is a SOFT gate (leaves the message queued, never raises), so a
+    # single undeliverable steer can't abort a batch inbox pull of sibling messages.
+    steer_reason = _steer_refusal_reason(conn, row)
+    if steer_reason is not None:
+        _log_event(conn, message_id, "delivery_refused", steer_reason)
+        out = get_message_status(conn, message_id)
+        out["delivered"] = False
+        out["refused_reason"] = steer_reason
+        return out
 
     if not acquire_lease(conn, row["dest_session_id"], holder):
         _log_event(conn, message_id, "delivery_refused", "destination lease held by another deliverer")

@@ -143,6 +143,30 @@ class TestToolCalls(McpBase):
         self.assertTrue(result["isError"])
         self.assertEqual(payload["code"], "not_found")
 
+    def test_boolean_string_not_coerced_open(self):
+        # Regression: a JSON string "false" must NOT coerce to True and flip a security gate
+        # (accepts_steering / authorized) open. It must be rejected as a type error.
+        result, payload = self.call("portal_register_session",
+                                    {"product": "claude", "runtime_session_id": "B",
+                                     "accepts_steering": "false"})
+        self.assertTrue(result["isError"])
+        self.assertIn("boolean", payload["error"])
+
+    def test_authorized_string_rejected(self):
+        result, payload = self.call("portal_send_message",
+                                    {"source_session_id": "codex:A", "dest_session_id": "claude:B",
+                                     "body": "x", "authorship": "user", "kind": "steer",
+                                     "authorized": "false"})
+        self.assertTrue(result["isError"])
+        self.assertEqual(payload["code"], "validation_error")
+
+    def test_negative_ttl_rejected(self):
+        result, payload = self.call("portal_send_message",
+                                    {"source_session_id": "codex:A", "dest_session_id": "claude:B",
+                                     "body": "x", "authorship": "user", "ttl_seconds": -999})
+        self.assertTrue(result["isError"])
+        self.assertIn(">=", payload["error"])
+
     def test_health(self):
         _, health = self.call("portal_health", {})
         self.assertTrue(health["ok"])

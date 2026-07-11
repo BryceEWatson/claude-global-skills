@@ -115,6 +115,20 @@ class TestClaudeStates(StateBase):
         self.assertEqual(log.read_bytes(), before)
         self.assertEqual(log.stat().st_mtime, mtime)
 
+    def test_reengaged_after_completion_is_not_idle(self):
+        # Regression: a stale end_turn followed by a FRESH user prompt must NOT read as
+        # idle — the user just re-engaged and the agent is active.
+        rows = [self._working(), self._end_turn(),
+                {"sessionId": "b", "message": {"role": "user",
+                 "content": [{"type": "text", "text": "do more"}]}}]
+        log = self._claude_log("b", rows)
+        self.assertEqual(st.classify("claude", "b", now=self._at(log, 5))["state"], st.ACTIVE)
+
+    def test_resolve_log_rejects_path_like_session(self):
+        # A session id is an opaque token; a path-shaped value never reaches the filesystem.
+        for evil in ("../../etc/passwd", "$HOME/.ssh/id_rsa", "a/b", "~/secret", "x\x00y"):
+            self.assertIsNone(st.resolve_log("claude", evil))
+
 
 class TestCodexStates(StateBase):
     def _complete(self):
@@ -151,6 +165,12 @@ class TestCodexStates(StateBase):
         self.assertEqual(
             st.classify("codex", "A", process_alive=False, now=self._at(log, 300))["state"],
             st.COMPLETED)
+
+    def test_reengaged_after_completion_is_not_idle(self):
+        rows = [self._working(), self._complete(),
+                {"type": "event_msg", "payload": {"type": "user_message", "message": "do more"}}]
+        log = self._codex_log("A", rows)
+        self.assertEqual(st.classify("codex", "A", now=self._at(log, 5))["state"], st.ACTIVE)
 
 
 class TestDeliverability(StateBase):

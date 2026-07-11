@@ -174,9 +174,34 @@ def _rpc_result(req_id, result: Any) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
 
+def _check_type(key: str, spec: dict, value) -> None:
+    """Enforce the declared JSON-schema type and bounds. Critically, this does NOT coerce:
+    a boolean field must be a real JSON boolean, so a truthy string like "false" is REJECTED
+    rather than silently flipping a security gate (authorized / accepts_steering) open."""
+    t = spec.get("type")
+    if t == "boolean":
+        if not isinstance(value, bool):
+            raise core.ValidationError(f"{key!r} must be a boolean (got {type(value).__name__})")
+    elif t == "integer":
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise core.ValidationError(f"{key!r} must be an integer")
+        if "minimum" in spec and value < spec["minimum"]:
+            raise core.ValidationError(f"{key!r} must be >= {spec['minimum']}")
+        if "maximum" in spec and value > spec["maximum"]:
+            raise core.ValidationError(f"{key!r} must be <= {spec['maximum']}")
+    elif t == "string":
+        if not isinstance(value, str):
+            raise core.ValidationError(f"{key!r} must be a string")
+        if "maxLength" in spec and len(value) > spec["maxLength"]:
+            raise core.ValidationError(f"{key!r} exceeds maxLength {spec['maxLength']}")
+        if "minLength" in spec and len(value) < spec["minLength"]:
+            raise core.ValidationError(f"{key!r} below minLength {spec['minLength']}")
+
+
 def _validate_args(schema: dict, args: dict) -> None:
-    """Minimal schema enforcement: required keys present, no unknown keys (the whitelist
-    that keeps prohibited fields out), and enum membership. Deep validation lives in core."""
+    """Schema enforcement: required keys present, no unknown keys (the whitelist that keeps
+    prohibited fields out), declared type + bounds, and enum membership. No coercion — a
+    type mismatch is a hard error. Deep semantic validation still lives in core."""
     props = schema.get("properties", {})
     for key in args:
         if key not in props:
@@ -186,7 +211,10 @@ def _validate_args(schema: dict, args: dict) -> None:
             raise core.ValidationError(f"missing required argument {req!r}")
     core.validate_no_prohibited_fields(args)
     for key, spec in props.items():
-        if key in args and "enum" in spec and args[key] not in spec["enum"]:
+        if key not in args:
+            continue
+        _check_type(key, spec, args[key])
+        if "enum" in spec and args[key] not in spec["enum"]:
             raise core.ValidationError(f"{key!r} must be one of {spec['enum']}")
 
 

@@ -181,6 +181,12 @@ class TestCodexFallback(DeliveryBase):
         self.assertEqual(res["via"], "native_task_message")
 
 
+class TestCoherence(DeliveryBase):
+    def test_push_deliverable_sets_agree(self):
+        # The push-deliverable rule is one rule; the two layers must not drift.
+        self.assertEqual(st.PUSH_DELIVERABLE, set(core.PUSH_DELIVERABLE_STATES))
+
+
 class TestClaudeResumeSafeguards(DeliveryBase):
     def test_resume_refused_when_active(self):
         self.claude_active("B")  # active session must never be resumed

@@ -193,6 +193,17 @@ class TestIdempotency(CoreBase):
         b = self._send()
         self.assertNotEqual(a["message_id"], b["message_id"])
 
+    def test_key_scoped_to_destination(self):
+        # Regression: the SAME natural key to two DIFFERENT recipients must create two
+        # distinct messages, not collide and silently drop the second (returning the first's
+        # body). Idempotency identity is scoped to (source, dest, key).
+        m_b = self._send(dest_session_id="claude:B", body="to B", idempotency_key="task-42")
+        m_c = self._send(dest_session_id="codex:C", body="to C", idempotency_key="task-42")
+        self.assertNotEqual(m_b["message_id"], m_c["message_id"])
+        self.assertFalse(m_c.get("idempotent_duplicate"))
+        self.assertEqual(core.get_message_status(self.conn, m_c["message_id"])["body"], "to C")
+        self.assertEqual(core.get_message_status(self.conn, m_b["message_id"])["body"], "to B")
+
 
 class TestLifecycle(CoreBase):
     def setUp(self):
@@ -245,6 +256,14 @@ class TestLifecycle(CoreBase):
         with self.assertRaises(core.ConflictError):
             core.acknowledge(self.conn, m["message_id"])  # cannot ack a queued (undelivered) msg
 
+    def test_fail_message_reaches_failed_state(self):
+        m = self._send(idempotency_key="k")
+        core.fail_message(self.conn, m["message_id"], "delivery error")
+        got = core.get_message_status(self.conn, m["message_id"])
+        self.assertEqual(got["status"], "failed")
+        self.assertEqual(got["last_error"], "delivery error")
+        self.assertIn("failed", [e["event"] for e in core.message_events(self.conn, m["message_id"])])
+
 
 class TestAuthorizationAndLoops(CoreBase):
     def setUp(self):
@@ -257,15 +276,28 @@ class TestAuthorizationAndLoops(CoreBase):
 
     def test_authorized_steer_needs_optin_dest_to_deliver(self):
         m = self._send(kind="steer", authorship="user", authorized=True, idempotency_key="s1")
-        # Destination has NOT opted into steering -> delivery refused (authorization).
-        with self.assertRaises(core.AuthorizationError):
-            core.deliver_one(self.conn, m["message_id"], mode="pull", boundary="stop",
-                             dest_state=None, holder="h")
-        # Opt the destination in, then delivery succeeds.
-        core.register_session(self.conn, "claude", "B", accepts_steering=True)
+        # Destination has NOT opted into steering -> SOFT refusal (queued), never raises.
         res = core.deliver_one(self.conn, m["message_id"], mode="pull", boundary="stop",
                                dest_state=None, holder="h")
-        self.assertTrue(res["delivered"])
+        self.assertFalse(res["delivered"])
+        self.assertIn("steering", res["refused_reason"])
+        self.assertEqual(core.get_message_status(self.conn, m["message_id"])["status"], "queued")
+        # Opt the destination in, then delivery succeeds.
+        core.register_session(self.conn, "claude", "B", accepts_steering=True)
+        res2 = core.deliver_one(self.conn, m["message_id"], mode="pull", boundary="stop",
+                                dest_state=None, holder="h")
+        self.assertTrue(res2["delivered"])
+
+    def test_steer_to_non_optin_does_not_poison_inbox(self):
+        # Regression: an undeliverable authorized steer queued BEFORE a note must not abort
+        # the batch inbox pull — the note still delivers and no exception escapes.
+        steer = self._send(kind="steer", authorship="user", authorized=True, idempotency_key="s1")
+        self.clock.advance(1)  # ensure the note sorts AFTER the steer by created_at
+        note = self._send(body="just a note", idempotency_key="n1")
+        inbox = core.list_inbox(self.conn, "claude:B", deliver=True, boundary="stop")
+        statuses = {x["message_id"]: x["status"] for x in inbox}
+        self.assertEqual(statuses[steer["message_id"]], "queued")     # steer left queued
+        self.assertEqual(statuses[note["message_id"]], "delivered")   # note still delivered
 
     def test_self_message_rejected(self):
         with self.assertRaises(core.ValidationError):

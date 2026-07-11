@@ -28,10 +28,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Iterable
+
+# A session identifier is an opaque token, never a filesystem path. Anything with path
+# separators, parent refs, env-var/home sigils, or a null byte is refused so resolve_log
+# can't be turned into an arbitrary-file read (threat-model: "no arbitrary file reads").
+_SAFE_SESSION_RE = re.compile(r"^[A-Za-z0-9._:\-]{1,128}$")
 
 # States
 ACTIVE = "active"
@@ -83,11 +89,13 @@ def _tail(path: Path, limit: int = 400) -> list[dict[str, Any]]:
 
 
 def resolve_log(product: str, session: str) -> Path | None:
-    """Find the session's log by direct path or by id substring. None if not found.
-    Read-only: this only locates and stat/reads a file, never creates or modifies one."""
-    direct = Path(os.path.expandvars(os.path.expanduser(session)))
-    if direct.is_file():
-        return direct.resolve()
+    """Find the session's log by id substring WITHIN the product's log root. None if not
+    found. The identifier is validated as an opaque token (no path chars), so this can only
+    ever match a file already under the product root — never an arbitrary path. Read-only:
+    it locates and stat/reads a log, never creates or modifies one, and never expands env
+    vars or `~` from the identifier."""
+    if not isinstance(session, str) or not _SAFE_SESSION_RE.match(session):
+        return None
     if product == "claude":
         root = claude_root()
         if not root.exists():
@@ -115,9 +123,17 @@ def _analyze_claude(rows: list[dict[str, Any]]) -> dict[str, Any]:
         msg = row.get("message")
         if not isinstance(msg, dict):
             continue
+        role = msg.get("role")
+        # A fresh USER message after a completion marker starts a NEW turn: the session is
+        # re-engaged and about to work. Without this reset a stale end_turn would keep the
+        # session classified idle even though the user just prompted it again.
+        if role == "user":
+            turn_complete = False
+            awaiting = False
+            continue
         stop = msg.get("stop_reason")
         content = msg.get("content")
-        # Any fresh activity after a stop resets completion.
+        # Any assistant tool activity after a stop resets completion.
         if isinstance(content, list):
             for part in content:
                 if not isinstance(part, dict):
@@ -126,12 +142,10 @@ def _analyze_claude(rows: list[dict[str, Any]]) -> dict[str, Any]:
                     name = str(part.get("name") or "").lower()
                     turn_complete = False
                     awaiting = name in _AWAIT_TOOLS
-                elif part.get("type") == "text" and msg.get("role") == "assistant":
-                    awaiting = awaiting  # unchanged; text alone isn't an input request
         if stop == "end_turn":
             turn_complete = True
             awaiting = False
-        elif stop in ("tool_use",):
+        elif stop == "tool_use":
             turn_complete = False
     return {"turn_complete": turn_complete, "awaiting_input": awaiting}
 
@@ -154,9 +168,16 @@ def _analyze_codex(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 activity_idx = i
                 text = str(payload.get("message") or "").lower()
                 awaiting = any(k in text for k in _AWAIT_RE)
+            elif et in ("user_message", "user_input"):
+                # A fresh user turn after a task_complete re-engages the session.
+                activity_idx = i
+                awaiting = False
         elif kind == "response_item":
             it = payload.get("type")
             if it in ("custom_tool_call", "function_call"):
+                activity_idx = i
+                awaiting = False
+            elif it == "message" and payload.get("role") == "user":
                 activity_idx = i
                 awaiting = False
     turn_complete = complete_idx >= 0 and complete_idx >= activity_idx
@@ -205,7 +226,6 @@ def classify(product: str, session: str, *, process_alive: bool | None = None,
 
 
 PUSH_DELIVERABLE = {IDLE, WAITING}
-RESUME_CANDIDATE = {COMPLETED, STALE}
 
 
 def is_push_deliverable(state: str) -> bool:
