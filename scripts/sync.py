@@ -1,28 +1,45 @@
 #!/usr/bin/env python3
-"""sync.py — keep this repo in sync with the live ~/.claude/skills/ runtime.
+"""sync.py — repo-authoritative cross-runtime sync for global skills.
 
-Model: LIVE-AUTHORITATIVE + CAPTURE. Skills are edited where they run
-(~/.claude/skills/<name>/); this tool captures those changes back into the repo
-(the durable, reviewed mirror + multi-machine source). The reverse direction
-(deploy repo -> live) is the secondary path, for a fresh machine or a rollback.
+Model: REPO-AUTHORITATIVE (canonical) + materialized deploy. This repository is the
+source of truth. Each skill deploys to one or more *targets* (products):
+
+    claude -> ~/.claude/skills   (override: $CLAUDE_SKILLS_DIR)
+    codex  -> ~/.codex/skills    (override: $CODEX_SKILLS_DIR)
+
+A skill declares its targets via a top-level `targets:` key in SKILL.md frontmatter
+(absent -> [claude], which keeps every pre-existing Claude-only skill working
+unchanged). Shared content lives ONCE in the skill directory; files that belong to a
+single target live under <skill>/overlays/<target>/ and are *added* (additive-only)
+onto the shared content when deploying to that target. A small {{SKILL_HOME}} token
+in shared text files expands to the target's install path so one shared SKILL.md
+produces a product-correct command in each install.
 
 Modes:
-  --check     Report drift between live ~/.claude/skills/ and this repo. Read-only.
-              exit 0 = in sync, exit 3 = drift found (so the drift hook can nudge),
-              exit 2 = environment problem (live dir or repo not found).
-  --capture   Copy live skills -> repo working tree (exclusions applied), print
-              what changed + a cruft/secret pre-scan, then print the git/PR steps.
-              Does NOT touch git — staging/commit/PR stays operator-driven so every
-              capture still lands as a reviewed PR.
-  --deploy    Copy repo skills -> live ~/.claude/skills/ (exclusions applied; never
-              clobbers a live .local-state/). For a fresh machine or rollback.
+  --check     Report drift between each target's live copy and the repo-materialized
+              expected output (live vs forward-materialize, LF-normalized). Read-only.
+              exit 0 = in sync, 3 = drift, 2 = environment problem, 1 = config error.
+  --deploy    Materialize repo -> live for each skill's declared targets. Never
+              clobbers a live .local-state/; only touches <home>/<skill>/, so sibling
+              and unrelated installed skills (and other product homes) are untouched.
+  --capture   Reverse-map ONE target's live copy -> repo (requires --target). Refuses
+              on divergence or on an unclassifiable live file; writes file-by-file
+              (never wipes the skill dir), leaving other targets' overlays untouched.
+              Does NOT touch git — staging/commit/PR stays operator-driven.
 
-A "skill" = a top-level directory containing a SKILL.md (in BOTH trees). Repo infra
-(scripts/, hooks/, README.md, .gitignore, .git/) has no SKILL.md and is ignored.
+Default target set (--check / --deploy, no --target): each skill's declared targets
+whose live home directory already exists. This is symmetric across check and deploy
+(so deploy->check round-trips cleanly) and never creates or nags about a product home
+that isn't present. An explicit --target forces that target (and, for deploy, creates
+its home). --target both = {claude, codex}; invalid for --capture.
 
-Never copied in either direction: .local-state/, __pycache__/, *.pyc
+A "skill" = a top-level directory containing a SKILL.md. Repo infra (scripts/, hooks/,
+docs/, README.md, .git/) has no SKILL.md and is ignored.
 
-stdlib only; Windows-safe (utf-8 reconfigure).
+Never copied in either direction: .local-state/, __pycache__/, *.pyc, and the repo's
+own overlays/ directory (its contents are layered per-target, never installed as-is).
+
+stdlib only; Windows-safe (utf-8 reconfigure; CRLF/LF-normalized comparisons).
 """
 from __future__ import annotations
 
@@ -34,11 +51,16 @@ import sys
 from pathlib import Path
 
 EXIT_OK = 0
+EXIT_ERROR = 1
 EXIT_ENV = 2
 EXIT_DRIFT = 3
 
 EXCLUDE_DIRS = {".local-state", "__pycache__", ".git", "node_modules"}
 EXCLUDE_FILE_SUFFIXES = (".pyc",)
+OVERLAY_DIR = "overlays"
+
+VALID_TARGETS = ("claude", "codex")
+SKILL_HOME_TOKEN = "{{SKILL_HOME}}"
 
 # Cruft/secret patterns flagged (warn-only) when capturing NEW or changed files.
 _SECRET_RE = re.compile(
@@ -47,8 +69,8 @@ _SECRET_RE = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,})"
 )
 # Project-coupled absolute paths that shouldn't ride into a generic skill
-# (~/.claude paths are fine; a hardcoded OTHER project under Projects/ is a smell).
-# Matches forward-slash, backslash, AND WSL (/mnt/c/) forms on this Win11+WSL2 setup.
+# (~/.claude and ~/.codex paths are fine; a hardcoded OTHER project under Projects/
+# is a smell). Matches forward-slash, backslash, AND WSL (/mnt/c/) forms.
 _PROJECT_PATH_RE = re.compile(
     r"(?:[Cc]:[\\/]|/mnt/c/)Users[\\/][^\\/]+[\\/]Projects[\\/](?!\*)[A-Za-z0-9._-]+"
 )
@@ -59,10 +81,9 @@ def eprint(*a: object) -> None:
     print(*a, file=sys.stderr)
 
 
-def live_skills_dir() -> Path:
-    return (Path.home() / ".claude" / "skills").resolve()
-
-
+# --------------------------------------------------------------------------- #
+# Environment / roots
+# --------------------------------------------------------------------------- #
 def repo_root() -> Path:
     # scripts/sync.py -> repo root is the parent of scripts/
     env = os.environ.get("CLAUDE_GLOBAL_SKILLS_REPO")
@@ -71,147 +92,373 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def _skip(rel_parts) -> bool:
-    return any(p in EXCLUDE_DIRS for p in rel_parts)
+def target_home(target: str) -> Path:
+    """Live skills directory for a target. Env-overridable for hermetic tests."""
+    if target == "claude":
+        env = os.environ.get("CLAUDE_SKILLS_DIR")
+        return Path(env).resolve() if env else (Path.home() / ".claude" / "skills").resolve()
+    if target == "codex":
+        env = os.environ.get("CODEX_SKILLS_DIR")
+        return Path(env).resolve() if env else (Path.home() / ".codex" / "skills").resolve()
+    raise ValueError(f"unknown target: {target!r}")
 
 
-def list_skill_dirs(root: Path):
+def skill_home_expansion(target: str, name: str) -> str:
+    """The literal string {{SKILL_HOME}} expands to for a target install. $HOME stays
+    literal so the emitted command runs in both bash and PowerShell."""
+    sub = ".codex" if target == "codex" else ".claude"
+    return f"$HOME/{sub}/skills/{name}"
+
+
+# --------------------------------------------------------------------------- #
+# Byte helpers (line-ending normalized so a CRLF working tree compares equal to
+# an LF live copy — a content difference that is only line endings is NOT drift).
+# --------------------------------------------------------------------------- #
+def _norm_bytes(data: bytes) -> bytes:
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
+def _read_norm(path: Path) -> bytes:
+    return _norm_bytes(path.read_bytes())
+
+
+def _as_text(data: bytes) -> str | None:
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def substitute(data: bytes, target: str, name: str) -> bytes:
+    """Forward: expand {{SKILL_HOME}} for a target. Text files only; binaries pass."""
+    text = _as_text(data)
+    if text is None or SKILL_HOME_TOKEN not in text:
+        return data
+    return text.replace(SKILL_HOME_TOKEN, skill_home_expansion(target, name)).encode("utf-8")
+
+
+def unsubstitute(data: bytes, target: str, name: str) -> bytes:
+    """Reverse (for capture): fold a target's expanded install path back to the token.
+    Anchored to the exact expansion string; safe because shared files may not contain
+    a literal expansion (see check_no_literal_expansion / the capture guard)."""
+    text = _as_text(data)
+    if text is None:
+        return data
+    exp = skill_home_expansion(target, name)
+    if exp not in text:
+        return data
+    return text.replace(exp, SKILL_HOME_TOKEN).encode("utf-8")
+
+
+# --------------------------------------------------------------------------- #
+# Frontmatter targets
+# --------------------------------------------------------------------------- #
+def _parse_targets_value(rest: str) -> list[str]:
+    rest = rest.strip()
+    if rest.startswith("["):
+        close = rest.find("]")
+        if close == -1:
+            raise ValueError(f"malformed `targets:` flow list (no closing ]): {rest!r}")
+        inner = rest[1:close]
+        return [p.strip().strip('"').strip("'") for p in inner.split(",") if p.strip()]
+    # scalar (single target) — strip an inline comment
+    hpos = rest.find("#")
+    if hpos != -1:
+        rest = rest[:hpos].strip()
+    rest = rest.strip().strip('"').strip("'")
+    return [rest] if rest else []
+
+
+def read_frontmatter_targets(skill_md: Path) -> list[str]:
+    """Parse the LEADING fenced YAML frontmatter block for `targets:`.
+
+    Absent key -> ['claude'] (silent, backward-compatible default).
+    Present-but-malformed or unknown value -> ValueError (fail loud; never a silent
+    degrade to Claude-only, which would hide a dropped Codex target).
+    """
+    try:
+        text = _read_norm(skill_md).decode("utf-8", errors="replace")
+    except OSError:
+        return ["claude"]
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return ["claude"]
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end = i
+            break
+    if end is None:
+        return ["claude"]
+    fm = lines[1:end]
+
+    targets: list[str] | None = None
+    i = 0
+    while i < len(fm):
+        m = re.match(r"^targets\s*:\s*(.*)$", fm[i])
+        if not m:
+            i += 1
+            continue
+        rest = m.group(1).strip()
+        if rest:
+            targets = _parse_targets_value(rest)
+        else:
+            block: list[str] = []
+            j = i + 1
+            while j < len(fm):
+                line = fm[j]
+                if line.strip() == "":
+                    j += 1
+                    continue
+                bm = re.match(r"^\s*-\s*(.+?)\s*$", line)
+                if not bm:
+                    break
+                val = bm.group(1).strip()
+                hpos = val.find("#")
+                if hpos != -1:
+                    val = val[:hpos].strip()
+                block.append(val.strip().strip('"').strip("'"))
+                j += 1
+            targets = block
+        break
+
+    if targets is None:
+        return ["claude"]
+    norm = [t.strip().lower() for t in targets if t.strip()]
+    if not norm:
+        raise ValueError(f"{skill_md}: `targets:` present but empty (use e.g. [claude, codex])")
+    bad = [t for t in norm if t not in VALID_TARGETS]
+    if bad:
+        raise ValueError(
+            f"{skill_md}: unknown target(s) {bad}; allowed: {list(VALID_TARGETS)}"
+        )
+    seen: list[str] = []
+    for t in norm:
+        if t not in seen:
+            seen.append(t)
+    return seen
+
+
+# --------------------------------------------------------------------------- #
+# File enumeration
+# --------------------------------------------------------------------------- #
+def _walk_rel(root: Path, skip_overlay_root: bool = False) -> set[str]:
+    files: set[str] = set()
+    if not root.exists():
+        return files
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = Path(dirpath).relative_to(root)
+        dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
+        if skip_overlay_root and rel_dir == Path("."):
+            dirnames[:] = [d for d in dirnames if d != OVERLAY_DIR]
+        for fn in filenames:
+            if fn.endswith(EXCLUDE_FILE_SUFFIXES):
+                continue
+            files.add((Path(dirpath) / fn).relative_to(root).as_posix())
+    return files
+
+
+def shared_rel_files(skill_dir: Path) -> set[str]:
+    """Files that are shared across targets (excludes the repo's overlays/ dir)."""
+    return _walk_rel(skill_dir, skip_overlay_root=True)
+
+
+def overlay_rel_files(skill_dir: Path, target: str) -> set[str]:
+    """Files under <skill>/overlays/<target>/, relative to that overlay root."""
+    return _walk_rel(skill_dir / OVERLAY_DIR / target)
+
+
+def live_rel_files(live_dir: Path) -> set[str]:
+    return _walk_rel(live_dir)
+
+
+def list_skill_dirs(root: Path) -> dict[str, Path]:
     """Top-level dirs under root that contain a SKILL.md."""
-    out = {}
+    out: dict[str, Path] = {}
     if not root.exists():
         return out
     for child in sorted(root.iterdir()):
-        if not child.is_dir():
-            continue
-        if child.name in EXCLUDE_DIRS:
+        if not child.is_dir() or child.name in EXCLUDE_DIRS:
             continue
         if (child / "SKILL.md").is_file():
             out[child.name] = child
     return out
 
 
-def rel_files(skill_dir: Path):
-    """Relative file paths under a skill dir, excluding noise."""
-    files = set()
-    for dirpath, dirnames, filenames in os.walk(skill_dir):
-        dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
-        for fn in filenames:
-            if fn.endswith(EXCLUDE_FILE_SUFFIXES):
-                continue
-            full = Path(dirpath) / fn
-            files.add(full.relative_to(skill_dir).as_posix())
-    return files
+# --------------------------------------------------------------------------- #
+# Materialization (forward)
+# --------------------------------------------------------------------------- #
+def materialize(skill_dir: Path, target: str, name: str) -> dict[str, bytes]:
+    """The exact file set a target should receive = shared + that target's overlay,
+    with {{SKILL_HOME}} expanded. Overlays are additive-only: an overlay path that
+    shadows a shared path is a hard error (keeps the divergence guard well-defined)."""
+    out: dict[str, bytes] = {}
+    for rel in shared_rel_files(skill_dir):
+        out[rel] = substitute((skill_dir / rel).read_bytes(), target, name)
+    ov_base = skill_dir / OVERLAY_DIR / target
+    for rel in overlay_rel_files(skill_dir, target):
+        if rel in out:
+            raise ValueError(
+                f"{name}: overlay '{OVERLAY_DIR}/{target}/{rel}' shadows shared file "
+                f"'{rel}' — overlays are additive-only"
+            )
+        out[rel] = substitute((ov_base / rel).read_bytes(), target, name)
+    return out
 
 
-def _read_norm(path: Path) -> bytes:
-    """Read a file with line endings normalized (CRLF/CR -> LF), so a git
-    autocrlf working tree (CRLF) compares equal to the LF live copy. The skills
-    are all text; a content difference that is only line endings is NOT drift."""
-    return path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+def check_no_literal_expansion(skill_dir: Path, name: str) -> list[str]:
+    """Warn if a shared file contains a literal {{SKILL_HOME}} expansion instead of
+    the token — the token must be the only per-target representation so capture's
+    reverse pass is unambiguous."""
+    warnings: list[str] = []
+    exps = [(t, skill_home_expansion(t, name)) for t in VALID_TARGETS]
+    for rel in sorted(shared_rel_files(skill_dir)):
+        text = _as_text((skill_dir / rel).read_bytes())
+        if text is None:
+            continue
+        for _t, exp in exps:
+            if exp in text:
+                warnings.append(
+                    f"{name}/{rel} contains literal '{exp}' — use {SKILL_HOME_TOKEN} instead"
+                )
+    return warnings
 
 
-def _file_differs(a: Path, b: Path) -> bool:
-    try:
-        return _read_norm(a) != _read_norm(b)
-    except OSError:
-        return True
+# --------------------------------------------------------------------------- #
+# Target resolution
+# --------------------------------------------------------------------------- #
+def resolve_targets(arg_target):
+    """None -> per-skill default (declared ∩ homes-that-exist). 'both' -> all."""
+    if arg_target in (None, "default"):
+        return None
+    if arg_target == "both":
+        return list(VALID_TARGETS)
+    return [arg_target]
 
 
-def diff_skill(live_dir: Path, repo_dir: Path):
-    """Return (added, removed, changed) rel-paths comparing live -> repo.
+def effective_targets(declared: list[str], requested) -> list[str]:
+    if requested is None:
+        return [t for t in declared if target_home(t).exists()]
+    return [t for t in requested if t in declared]
 
-    added   = in live, not in repo (would be captured)
-    removed = in repo, not in live (live deleted them)
-    changed = in both but content differs
+
+# --------------------------------------------------------------------------- #
+# Drift (check)
+# --------------------------------------------------------------------------- #
+def diff_target(name: str, skill_dir: Path, target: str):
+    """(added, removed, changed) comparing materialized(expected) -> live[target].
+
+    added   = expected but missing in live (deploy would add)
+    removed = in live but not expected (deploy would remove)
+    changed = present in both, content differs (LF-normalized)
     """
-    live_files = rel_files(live_dir) if live_dir.exists() else set()
-    repo_files = rel_files(repo_dir) if repo_dir.exists() else set()
-    added = sorted(live_files - repo_files)
-    removed = sorted(repo_files - live_files)
+    expected = materialize(skill_dir, target, name)
+    live_dir = target_home(target) / name
+    live_files = live_rel_files(live_dir)
+    exp_files = set(expected)
+    added = sorted(exp_files - live_files)
+    removed = sorted(live_files - exp_files)
     changed = []
-    for rel in sorted(live_files & repo_files):
-        if _file_differs(live_dir / rel, repo_dir / rel):
+    for rel in sorted(exp_files & live_files):
+        if _norm_bytes(expected[rel]) != _read_norm(live_dir / rel):
             changed.append(rel)
     return added, removed, changed
 
 
-def compute_drift(only=None):
-    """Return a dict of per-skill drift between live and repo.
-
-    only: if given, restrict the comparison to that single skill name (used by the
-    drift hook so editing an in-sync skill doesn't nag about an unrelated one)."""
-    live = list_skill_dirs(live_skills_dir())
-    repo = list_skill_dirs(repo_root())
-    names = sorted(set(live) | set(repo))
-    if only is not None:
-        names = [n for n in names if n == only]
-    drift = {}
-    for name in names:
-        if name in live and name not in repo:
-            drift[name] = {"status": "live-only (new)", "added": sorted(rel_files(live[name])),
-                           "removed": [], "changed": []}
+def _unmanaged_live_skills(requested, repo: dict[str, Path]) -> list[tuple[str, str]]:
+    """Skills present in a consulted live home but not in the repo (informational)."""
+    out = []
+    targets = list(VALID_TARGETS) if requested is None else requested
+    for t in targets:
+        home = target_home(t)
+        if not home.exists():
             continue
-        if name in repo and name not in live:
-            drift[name] = {"status": "repo-only (deleted live?)", "added": [],
-                           "removed": sorted(rel_files(repo[name])), "changed": []}
-            continue
-        a, r, c = diff_skill(live[name], repo[name])
-        if a or r or c:
-            drift[name] = {"status": "changed", "added": a, "removed": r, "changed": c}
-    return drift
+        for lname in list_skill_dirs(home):
+            if lname not in repo:
+                out.append((lname, t))
+    return out
 
 
-def print_drift(drift) -> None:
+def print_drift(drift, unmanaged=None, warnings=None, notes=None) -> None:
+    for w in warnings or []:
+        print(f"! warning: {w}")
+    for n in notes or []:
+        print(f"note: {n}")
     if not drift:
-        print("in sync: live ~/.claude/skills/ matches the repo (no drift).")
-        return
-    print(f"DRIFT: {len(drift)} skill(s) differ between live and repo:\n")
-    for name, d in drift.items():
-        print(f"  {name}  [{d['status']}]")
-        for rel in d["added"]:
-            print(f"      + {rel}  (in live, not repo)")
-        for rel in d["changed"]:
-            print(f"      ~ {rel}  (content differs)")
-        for rel in d["removed"]:
-            print(f"      - {rel}  (in repo, not live)")
-    print()
+        print("in sync: live target(s) match the repo-materialized output (no drift).")
+    else:
+        print(f"DRIFT: {len(drift)} skill/target pair(s) differ:\n")
+        for (name, target), d in drift.items():
+            print(f"  {name} [{target}]")
+            for rel in d["added"]:
+                print(f"      + {rel}  (expected, missing in live)")
+            for rel in d["changed"]:
+                print(f"      ~ {rel}  (content differs)")
+            for rel in d["removed"]:
+                print(f"      - {rel}  (in live, not expected — deploy would remove)")
+        print()
+    if unmanaged:
+        labels = sorted({f"{n} [{t}]" for n, t in unmanaged})
+        shown = ", ".join(labels[:12]) + (" …" if len(labels) > 12 else "")
+        print(f"note: {len(labels)} unmanaged live-only skill(s) not tracked by the "
+              f"repo (left untouched): {shown}")
 
 
-def cruft_scan(paths):
-    """Warn-only scan of given absolute files for secrets/cruft."""
-    warnings = []
-    for p in paths:
-        rel = p
-        name = str(p).replace("\\", "/")
-        if _CRUFT_NAME_RE.search(name):
-            warnings.append(f"cruft-name: {name} (one-shot/scratch — exclude from the skill?)")
+def do_check(arg_target, only=None) -> int:
+    requested = resolve_targets(arg_target)
+    repo = list_skill_dirs(repo_root())
+    names = sorted(repo)
+    if only:
+        names = [n for n in names if n == only]
+
+    pairs: list[tuple[str, str]] = []
+    homes_consulted: set[str] = set()
+    warnings: list[str] = []
+    notes: list[str] = []
+    for name in names:
         try:
-            text = Path(p).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        if _SECRET_RE.search(text):
-            warnings.append(f"SECRET-LIKE: {name} (matches a token/key pattern)")
-        proj_hits = sorted(set(m.group(0) for m in _PROJECT_PATH_RE.finditer(text)))
-        if proj_hits:
-            warnings.append(f"project-coupled path(s) in {name}: {', '.join(proj_hits[:4])}")
-    return warnings
+            declared = read_frontmatter_targets(repo[name] / "SKILL.md")
+        except ValueError as e:
+            eprint(f"error: {e}")
+            return EXIT_ERROR
+        eff = effective_targets(declared, requested)
+        for t in eff:
+            homes_consulted.add(t)
+            pairs.append((name, t))
+        if requested is None:
+            for t in declared:
+                if t not in eff:
+                    notes.append(f"{name}: declares '{t}' but its home is absent — "
+                                 f"run --deploy --target {t} to install")
 
-
-def do_check(only=None) -> int:
-    if not live_skills_dir().exists():
-        eprint(f"error: live skills dir not found: {live_skills_dir()}")
+    existing = [t for t in homes_consulted if target_home(t).exists()]
+    if homes_consulted and not existing:
+        eprint(f"error: no live skills home found for target(s): {sorted(homes_consulted)}")
         return EXIT_ENV
-    drift = compute_drift(only)
-    print_drift(drift)
+
+    drift = {}
+    for name, t in pairs:
+        if not target_home(t).exists():
+            continue
+        warnings += check_no_literal_expansion(repo[name], name)
+        try:
+            a, r, c = diff_target(name, repo[name], t)
+        except ValueError as e:
+            eprint(f"error: {e}")
+            return EXIT_ERROR
+        if a or r or c:
+            drift[(name, t)] = {"added": a, "removed": r, "changed": c}
+
+    unmanaged = _unmanaged_live_skills(requested, repo) if only is None else []
+    print_drift(drift, unmanaged, sorted(set(warnings)), notes)
     return EXIT_DRIFT if drift else EXIT_OK
 
 
-def _copy_skill(src: Path, dst: Path):
-    """Copy src skill dir -> dst, applying exclusions. dst is replaced for tracked
-    content but a pre-existing dst/.local-state/ is preserved (deploy safety)."""
-    def ignore(dirpath, names):
-        return [n for n in names if n in EXCLUDE_DIRS or n.endswith(EXCLUDE_FILE_SUFFIXES)]
-    # Remove only the non-.local-state content of dst, then copy.
+# --------------------------------------------------------------------------- #
+# Deploy
+# --------------------------------------------------------------------------- #
+def _write_materialized(dst: Path, files: dict[str, bytes]) -> None:
+    """Replace non-.local-state content of dst, then write the materialized files."""
     if dst.exists():
         for child in dst.iterdir():
             if child.name == ".local-state":
@@ -224,68 +471,246 @@ def _copy_skill(src: Path, dst: Path):
                 except OSError:
                     pass
     dst.mkdir(parents=True, exist_ok=True)
-    for item in src.iterdir():
-        if item.name in EXCLUDE_DIRS:
-            continue
-        target = dst / item.name
-        if item.is_dir():
-            shutil.copytree(item, target, ignore=ignore, dirs_exist_ok=True)
-        elif not item.name.endswith(EXCLUDE_FILE_SUFFIXES):
-            shutil.copy2(item, target)
+    for rel, data in files.items():
+        path = dst / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
 
 
-def do_capture() -> int:
-    live = list_skill_dirs(live_skills_dir())
-    if not live:
-        eprint(f"error: no live skills found under {live_skills_dir()}")
-        return EXIT_ENV
-    drift = compute_drift()
-    if not drift:
-        print("nothing to capture: live and repo already in sync.")
-        return EXIT_OK
-    # Copy each drifted/new live skill into the repo (skip repo-only deletions —
-    # those are surfaced for the operator to decide, not auto-deleted).
-    captured = []
-    new_or_changed_files = []
-    for name, d in drift.items():
-        if d["status"].startswith("repo-only"):
-            print(f"NOTE: '{name}' exists in repo but not live — NOT deleting; "
-                  f"resolve manually if it was intentionally removed.")
-            continue
-        src = live[name]
-        dst = repo_root() / name
-        _copy_skill(src, dst)
-        captured.append(name)
-        for rel in d["added"] + d["changed"]:
-            new_or_changed_files.append(src / rel)
-    print(f"\ncaptured {len(captured)} skill(s) into the repo: {', '.join(captured) or '(none)'}")
-    # Cruft/secret pre-scan over the new/changed files.
-    warnings = cruft_scan(new_or_changed_files)
-    if warnings:
-        print("\n! pre-scan warnings (review before committing):")
-        for w in warnings:
-            print(f"   - {w}")
-    print("\nNext steps (capture stays operator-driven so it lands as a reviewed PR):")
-    print("   git -C <repo> checkout -b sync/capture-<date>")
-    print("   git -C <repo> add -A && git -C <repo> status")
-    print("   # review the diff, then commit + open a PR; run /review-loop for the verdict")
-    return EXIT_OK
-
-
-def do_deploy() -> int:
+def do_deploy(arg_target, only=None) -> int:
+    requested = resolve_targets(arg_target)
     repo = list_skill_dirs(repo_root())
     if not repo:
         eprint(f"error: no skills found in repo {repo_root()}")
         return EXIT_ENV
-    live_root = live_skills_dir()
-    live_root.mkdir(parents=True, exist_ok=True)
-    for name, src in repo.items():
-        _copy_skill(src, live_root / name)
-    print(f"deployed {len(repo)} skill(s) repo -> live (preserved any live .local-state/): "
-          f"{', '.join(sorted(repo))}")
+    names = sorted(repo)
+    if only:
+        names = [n for n in names if n == only]
+
+    deployed: dict[str, list[str]] = {}
+    skipped_notes: list[str] = []
+    warnings: list[str] = []
+    for name in names:
+        try:
+            declared = read_frontmatter_targets(repo[name] / "SKILL.md")
+        except ValueError as e:
+            eprint(f"error: {e}")
+            return EXIT_ERROR
+        eff = effective_targets(declared, requested)
+        warnings += check_no_literal_expansion(repo[name], name)
+        # Materialize all targets first so an overlay-shadow error can't half-deploy.
+        try:
+            mats = {t: materialize(repo[name], t, name) for t in eff}
+        except ValueError as e:
+            eprint(f"error: {e}")
+            return EXIT_ERROR
+        for t, files in mats.items():
+            home = target_home(t)
+            home.mkdir(parents=True, exist_ok=True)
+            _write_materialized(home / name, files)
+            deployed.setdefault(t, []).append(name)
+        if requested is None:
+            for t in declared:
+                if t not in eff:
+                    skipped_notes.append(
+                        f"{name}: declares '{t}' but its home is absent — "
+                        f"run --deploy --target {t} to install there")
+
+    for w in sorted(set(warnings)):
+        print(f"! warning: {w}")
+    for t in VALID_TARGETS:
+        if deployed.get(t):
+            print(f"deployed {len(deployed[t])} skill(s) -> {target_home(t)}: "
+                  f"{', '.join(sorted(deployed[t]))}")
+    for n in skipped_notes:
+        print(f"note: {n}")
+    if not deployed:
+        print("nothing deployed (no skill declares an available target).")
     return EXIT_OK
 
 
+# --------------------------------------------------------------------------- #
+# Capture (reverse)
+# --------------------------------------------------------------------------- #
+def _repo_shared_image(skill_dir: Path) -> dict[str, bytes]:
+    return {rel: _read_norm(skill_dir / rel) for rel in shared_rel_files(skill_dir)}
+
+
+def _reverse_shared_image(skill_dir: Path, target: str, live_dir: Path) -> dict[str, bytes]:
+    """Reverse-materialize a live copy's SHARED region into token form (normalized).
+    Overlay files and files with no repo-shared counterpart are excluded."""
+    shared_manifest = shared_rel_files(skill_dir)
+    overlay_manifest = overlay_rel_files(skill_dir, target)
+    name = skill_dir.name
+    img: dict[str, bytes] = {}
+    for rel in live_rel_files(live_dir):
+        if rel in overlay_manifest or rel not in shared_manifest:
+            continue
+        data = (live_dir / rel).read_bytes()
+        img[rel] = _norm_bytes(unsubstitute(data, target, name))
+    return img
+
+
+def _capture_existing(name, skill_dir, target, live_dir):
+    """Returns (ok, message, changed_files). Enforces the divergence guard, then
+    classifies each live file to shared/ or overlays/<target>/ (refuse if neither)."""
+    declared = read_frontmatter_targets(skill_dir / "SKILL.md")
+    repo_shared_now = _repo_shared_image(skill_dir)
+    shared_T = _reverse_shared_image(skill_dir, target, live_dir)
+
+    for t2 in declared:
+        if t2 == target:
+            continue
+        h2 = target_home(t2)
+        live2 = h2 / name
+        if not h2.exists() or not live2.exists():
+            continue
+        shared_T2 = _reverse_shared_image(skill_dir, t2, live2)
+        if shared_T2 == repo_shared_now or shared_T2 == shared_T:
+            continue
+        conflicts = sorted(
+            rel for rel in set(shared_T) | set(shared_T2)
+            if shared_T.get(rel) != shared_T2.get(rel)
+        )
+        return (False,
+                f"{name}: DIVERGENCE between live[{target}] and live[{t2}] in shared "
+                f"file(s) {conflicts[:6]} — refusing to capture; reconcile manually.",
+                [])
+
+    shared_manifest = shared_rel_files(skill_dir)
+    overlay_manifest = overlay_rel_files(skill_dir, target)
+    writes: list[tuple[Path, bytes]] = []
+    changed: list[Path] = []
+    unclassifiable: list[str] = []
+    for rel in sorted(live_rel_files(live_dir)):
+        data = (live_dir / rel).read_bytes()
+        if rel in overlay_manifest:
+            dest = skill_dir / OVERLAY_DIR / target / rel
+        elif rel in shared_manifest:
+            dest = skill_dir / rel
+        else:
+            unclassifiable.append(rel)
+            continue
+        new_bytes = unsubstitute(data, target, name)
+        if dest.exists() and _norm_bytes(dest.read_bytes()) == _norm_bytes(new_bytes):
+            continue  # no real change
+        writes.append((dest, new_bytes))
+        changed.append(dest)
+
+    if unclassifiable:
+        return (False,
+                f"{name}: unclassifiable live file(s) {unclassifiable[:6]} — not in "
+                f"shared content or overlays/{target}/. Place them explicitly in the "
+                f"repo (shared vs overlays/<target>/) before capturing.",
+                [])
+
+    for dest, data in writes:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+    return (True, "", changed)
+
+
+def do_capture(arg_target, only=None) -> int:
+    if arg_target in (None, "default", "both"):
+        eprint("error: --capture requires an explicit single --target (claude|codex).")
+        return EXIT_ERROR
+    target = arg_target
+    home = target_home(target)
+    if not home.exists():
+        eprint(f"error: live home for target '{target}' not found: {home}")
+        return EXIT_ENV
+
+    repo = list_skill_dirs(repo_root())
+    live = list_skill_dirs(home)
+    names = sorted(set(repo) | set(live))
+    if only:
+        names = [n for n in names if n == only]
+
+    captured: list[str] = []
+    refused: list[str] = []
+    notes: list[str] = []
+    changed_files: list[Path] = []
+    for name in names:
+        if name not in live:
+            if name in repo:
+                declared = read_frontmatter_targets(repo[name] / "SKILL.md")
+                if target in declared:
+                    notes.append(f"{name}: declares '{target}' but has no live copy "
+                                 f"there — not deleting; deploy it or resolve manually.")
+            continue
+        if name not in repo:
+            notes.append(f"{name}: live-only under {target} — the repo is canonical; "
+                         f"add it to the repo (shared + overlays/<target>/) manually.")
+            continue
+        try:
+            declared = read_frontmatter_targets(repo[name] / "SKILL.md")
+        except ValueError as e:
+            eprint(f"error: {e}")
+            return EXIT_ERROR
+        if target not in declared:
+            notes.append(f"{name}: live[{target}] exists but the repo skill doesn't "
+                         f"declare '{target}' — add it to targets first.")
+            continue
+        lit = check_no_literal_expansion(repo[name], name)
+        if lit:
+            refused.append(f"{name}: shared file has a literal SKILL_HOME expansion "
+                           f"({lit[0]}) — fix to use the token before capture.")
+            continue
+        ok, msg, files = _capture_existing(name, repo[name], target, live[name])
+        if ok:
+            if files:
+                captured.append(name)
+                changed_files += files
+            else:
+                notes.append(f"{name}: already in sync (nothing to capture).")
+        else:
+            refused.append(msg)
+
+    for r in refused:
+        print(f"REFUSED: {r}")
+    if captured:
+        print(f"\ncaptured {len(captured)} skill(s) into the repo (target {target}): "
+              f"{', '.join(sorted(captured))}")
+    else:
+        print(f"\nnothing captured (target {target}).")
+    for n in notes:
+        print(f"note: {n}")
+
+    warnings = cruft_scan(changed_files)
+    if warnings:
+        print("\n! pre-scan warnings (review before committing):")
+        for w in warnings:
+            print(f"   - {w}")
+    if captured:
+        print("\nNext steps (capture stays operator-driven so it lands as a reviewed PR):")
+        print("   git -C <repo> checkout -b sync/capture-<date>")
+        print("   git -C <repo> add -A && git -C <repo> status")
+        print("   # review the diff, then commit + open a PR; run /review-loop for the verdict")
+    return EXIT_ERROR if refused else EXIT_OK
+
+
+def cruft_scan(paths) -> list[str]:
+    """Warn-only scan of given files for secrets/cruft/project-coupling."""
+    warnings = []
+    for p in paths:
+        name = str(p).replace("\\", "/")
+        if _CRUFT_NAME_RE.search(name):
+            warnings.append(f"cruft-name: {name} (one-shot/scratch — exclude from the skill?)")
+        try:
+            text = Path(p).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if _SECRET_RE.search(text):
+            warnings.append(f"SECRET-LIKE: {name} (matches a token/key pattern)")
+        proj_hits = sorted({m.group(0) for m in _PROJECT_PATH_RE.finditer(text)})
+        if proj_hits:
+            warnings.append(f"project-coupled path(s) in {name}: {', '.join(proj_hits[:4])}")
+    return warnings
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
 def main(argv) -> int:
     for s in (sys.stdout, sys.stderr):
         if hasattr(s, "reconfigure"):
@@ -297,16 +722,19 @@ def main(argv) -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--check", action="store_true", help="report drift (read-only); exit 3 if drift")
-    g.add_argument("--capture", action="store_true", help="copy live -> repo (exclusions); operator commits/PRs")
-    g.add_argument("--deploy", action="store_true", help="copy repo -> live (fresh machine / rollback)")
-    p.add_argument("--skill", default=None, help="with --check: limit the comparison to one skill name")
+    g.add_argument("--capture", action="store_true", help="copy live -> repo for one --target; operator commits/PRs")
+    g.add_argument("--deploy", action="store_true", help="materialize repo -> live for declared targets")
+    p.add_argument("--target", choices=("claude", "codex", "both"), default=None,
+                   help="claude|codex|both. --check/--deploy default: declared targets whose "
+                        "home exists. --capture: required, single target.")
+    p.add_argument("--skill", default=None, help="limit the operation to one skill name")
     args = p.parse_args(argv)
     if args.check:
-        return do_check(args.skill)
+        return do_check(args.target, args.skill)
     if args.capture:
-        return do_capture()
+        return do_capture(args.target, args.skill)
     if args.deploy:
-        return do_deploy()
+        return do_deploy(args.target, args.skill)
     return EXIT_ENV
 
 

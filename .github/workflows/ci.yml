@@ -36,6 +36,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Run gemini-image unit tests
         run: python -m unittest discover -s gemini-image/tests -p 'test_*.py'
+      - name: Run sync engine tests
+        run: python -m unittest discover -s scripts/tests -p 'test_*.py'
+      - name: Run monitor-agent-thread tests
+        run: python -m unittest discover -s monitor-agent-thread/tests -p 'test_*.py'
+      - name: Run drift-hook tests
+        run: python -m unittest discover -s hooks/tests -p 'test_*.py'
       - name: Run krippendorff_alpha self-test
         run: python pattern-retrospective/lib/krippendorff_alpha.py --test
       - name: Compile-check every tracked .py

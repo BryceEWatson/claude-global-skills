@@ -1,0 +1,4 @@
+interface:
+  display_name: "Monitor Agent Thread"
+  short_description: "Monitor Claude Code and Codex sessions safely"
+  default_prompt: "Use $monitor-agent-thread to watch this Claude Code or Codex task and notify me about completion, blockers, approvals, stalls, or material deviations."

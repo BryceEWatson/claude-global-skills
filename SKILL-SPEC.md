@@ -34,6 +34,7 @@ below it is plain Markdown documentation.
 
 | Key | Use it for |
 |---|---|
+| `targets` | Which product(s) the skill deploys to: a list of `claude` and/or `codex` (flow `[claude, codex]` or a block list). **Absent → `[claude]`** (backward-compatible default). A present-but-malformed or unknown value is a hard error. See §2.1. |
 | `metadata.type` | A free-form type tag (e.g. `reference`). See `gemini-image/SKILL.md`, which sets `type: reference`. |
 | `allowed-tools` | Restrict the skill to a named subset of tools. Omit to allow all. |
 | `disable-model-invocation` | Set `true` for a directory that exists only to host machinery (a hook script, install/uninstall code) and must **never** be auto-invoked by the model. Such a skill is reachable by its support code, not by trigger phrases. |
@@ -76,6 +77,7 @@ my-skill/
 ├── scripts/            # executables the skill runs (CLIs, entry points)
 ├── lib/                # importable helpers (not run directly)
 ├── tests/              # python tests (discovered by the CI matrix, see §5)
+├── overlays/           # optional — per-target-only files (see §2.1); never installed as-is
 └── .local-state/       # runtime scratch — git-ignored, never committed
 ```
 
@@ -87,6 +89,30 @@ my-skill/
 - **`.local-state/`** — per-skill runtime output. It is git-ignored
   (`**/.local-state/` in `.gitignore`) and is the **only** sanctioned write
   area for skills that produce local data.
+- **`overlays/`** — per-target-only content (see §2.1). Excluded from the shared
+  file set and **never** installed into any live tree as-is.
+
+### 2.1 Cross-runtime targets (Claude Code + Codex)
+
+A skill deploys to the products listed in its `targets:` frontmatter (§1). Shared
+content is stored **once**; product-specific pieces are small overlays layered on top
+at deploy time (`scripts/sync.py` materializes this). Do not duplicate the shared body
+per target, and do not use symlinks/junctions.
+
+- **Overlays are additive-only.** `<skill>/overlays/<target>/<path>` adds a
+  target-only file at `<path>` in that target's install. An overlay path must **not**
+  shadow a shared-content path (that is a hard error). Example: Codex's
+  `overlays/codex/agents/openai.yaml` installs to `~/.codex/skills/<name>/agents/openai.yaml`
+  and is never installed into Claude Code.
+- **`{{SKILL_HOME}}` token.** In a shared text file, `{{SKILL_HOME}}` expands at deploy
+  time to the target's install dir (`$HOME/.claude/skills/<name>` or
+  `$HOME/.codex/skills/<name>`), so one shared `SKILL.md` yields a product-correct,
+  runnable command in each install. A shared file must **not** contain a literal
+  `$HOME/.<product>/skills/<name>` — use the token so capture's reverse pass stays
+  unambiguous.
+- **Deploy / check / capture** are target-aware; `--capture` requires an explicit
+  `--target` and refuses to silently resolve a divergence between two live copies.
+  `monitor-agent-thread/` is the reference dual-target skill.
 
 ### Skills that mutate `~/.claude/settings.json`
 
@@ -176,6 +202,9 @@ node --test review-loop/*.test.cjs chat-arch-thrash-detect/*.test.cjs
 
 # Python tests (stdlib unittest)
 python -m unittest discover -s gemini-image/tests -p 'test_*.py'
+python -m unittest discover -s scripts/tests -p 'test_*.py'
+python -m unittest discover -s monitor-agent-thread/tests -p 'test_*.py'
+python -m unittest discover -s hooks/tests -p 'test_*.py'
 python pattern-retrospective/lib/krippendorff_alpha.py --test
 ```
 
@@ -200,7 +229,8 @@ A skill PR without runnable tests for the code it adds is incomplete.
 
 - [ ] `name` in frontmatter equals the directory name exactly.
 - [ ] `description` covers what + when + example trigger phrases.
-- [ ] Optional keys (`metadata.type`, `allowed-tools`, `disable-model-invocation`, `argument-hint`) used correctly where present.
+- [ ] Optional keys (`targets`, `metadata.type`, `allowed-tools`, `disable-model-invocation`, `argument-hint`) used correctly where present.
+- [ ] Multi-target skills keep shared content once; product-only files live under `overlays/<target>/` (additive, no shadowing); per-target paths use `{{SKILL_HOME}}`, not a literal install path.
 - [ ] No top-level third-party imports; any dep is a lazy import with a `pip install --user` fallback.
 - [ ] Node code is zero-dependency.
 - [ ] Chat-mining skills route writes through `_guards.assert_safe_out` and output only under `.local-state/`.

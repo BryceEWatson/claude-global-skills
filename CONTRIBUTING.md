@@ -35,23 +35,47 @@ You edit the **repo copy directly** and test against your own `~/.claude`.
 > live→repo path and needs a populated live tree. As an outside contributor,
 > the repo *is* your source of truth; `--deploy` is how you test it.
 
-### Maintainer (live-authoritative)
+### Maintainer (repo-authoritative)
 
-The canonical copy lives at `~/.claude/skills/<name>/` and you edit it **there**,
-then capture back into the repo:
+The repo is canonical. Author the skill **here** and deploy it to the live tree(s):
 
-1. Edit the live skill at `~/.claude/skills/<name>/`.
-2. Capture into the repo working tree and run the cruft/secret pre-scan:
+1. Edit the skill in the repo (`<skill>/SKILL.md`, `scripts/`, `overlays/<target>/`, …).
+2. Deploy and verify:
 
    ```bash
-   python scripts/sync.py --capture   # copies live -> repo, prints what changed + warnings
+   python scripts/sync.py --deploy   # repo -> live, for each skill's declared targets
+   python scripts/sync.py --check    # confirm live matches the repo-materialized output
    ```
 
-   `--capture` deliberately does **not** touch git — staging stays in your hands
-   so every change lands as a reviewed PR.
-3. Review the diff. Address any pre-scan warnings (secret-like strings,
-   project-coupled absolute paths, scratch/`seed_*` cruft).
+3. Exercise the skill, iterate on the repo copy, redeploy.
 4. Commit on a `sync/<topic>` branch and open a PR.
+
+If you edited a *live* copy directly (e.g. while debugging in a session), pull it
+back with the target-explicit capture and run the cruft/secret pre-scan:
+
+```bash
+python scripts/sync.py --capture --target claude   # or --target codex
+```
+
+`--capture` requires an explicit `--target`, never touches git (staging stays in
+your hands so every change lands as a reviewed PR), and **refuses to silently
+resolve a divergence**: if two live copies of a dual-target skill have conflicting
+edits, it prints the conflicting files and writes nothing. Reconcile in the repo,
+redeploy, then re-capture if needed. Address any pre-scan warnings (secret-like
+strings, project-coupled absolute paths, scratch/`seed_*` cruft).
+
+### Adding a portable (dual-target) skill
+
+1. Set `targets: [claude, codex]` in the `SKILL.md` frontmatter (omit the key for
+   Claude-only; `[codex]` for Codex-only).
+2. Keep everything **shared** by default. Put files that belong to only one product
+   under `<skill>/overlays/<target>/` (e.g. `overlays/codex/agents/openai.yaml`).
+   Overlays are **additive-only** — an overlay path must not shadow a shared file.
+3. For a path that differs per product, write the `{{SKILL_HOME}}` token in the
+   shared file; it expands to that target's install dir at deploy time. Do **not**
+   write a literal `$HOME/.<product>/skills/<name>` in a shared file.
+4. `python scripts/sync.py --check --target both` (or `--deploy --target both`) to
+   materialize and verify each install contains only its intended files.
 
 ## Run the tests before opening a PR
 
@@ -63,6 +87,9 @@ node --test review-loop/*.test.cjs chat-arch-thrash-detect/*.test.cjs
 
 # Python (stdlib only)
 python -m unittest discover -s gemini-image/tests -p 'test_*.py'
+python -m unittest discover -s scripts/tests -p 'test_*.py'                 # sync engine
+python -m unittest discover -s monitor-agent-thread/tests -p 'test_*.py'    # monitor + privacy
+python -m unittest discover -s hooks/tests -p 'test_*.py'                   # drift hook
 python pattern-retrospective/lib/krippendorff_alpha.py --test
 ```
 
@@ -100,6 +127,20 @@ the directory name** (`sync.py` keys on this). The full contract — frontmatter
 fields, the `description` trigger surface, directory conventions, and the
 install/uninstall requirement for skills that mutate `~/.claude/settings.json` —
 is in [`SKILL-SPEC.md`](SKILL-SPEC.md). Read it before adding or renaming a skill.
+
+## Migration
+
+The engine moved from **live-authoritative** (edit the live copy, `--capture` it
+back) to **repo-authoritative** (author here, `--deploy` out). Two things to know:
+
+- **Nothing breaks for existing skills.** With no `targets:` key a skill defaults to
+  `[claude]`, so `--check`/`--deploy` behave exactly as before and never touch
+  `~/.codex`.
+- **`--capture` now takes a target.** Replace bare `python scripts/sync.py --capture`
+  with `python scripts/sync.py --capture --target claude`. The drift hook's nudge
+  already emits the correctly-targeted command. Prefer editing the repo and
+  redeploying over capturing; for a portable skill, capturing after editing two live
+  copies can hit the divergence guard by design.
 
 ## Merge gate
 
