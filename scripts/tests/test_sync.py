@@ -255,6 +255,50 @@ class TestDeploy(SyncTestBase):
         self.assertEqual(code, sync.EXIT_DRIFT)
         self.assertIn("deploy did not fully apply", err)
 
+    def test_fresh_machine_default_deploy_bootstraps_claude(self):
+        # P2 regression: on a fresh machine with NO homes at all, a bare `--deploy`
+        # (no --target) must still create ~/.claude/skills and install, not exit 0
+        # having done nothing. (Homes are not created in setUp; absence is real here.)
+        self.assertFalse(self.claude.exists())
+        self.assertFalse(self.codex.exists())
+        write_skill(self.repo, "c1", targets=["claude"], shared={"a.txt": "x\n"})
+        code, out, _ = self.run_mode(sync.do_deploy, None, None)
+        self.assertEqual(code, sync.EXIT_OK, out)
+        self.assertTrue((self.claude / "c1" / "a.txt").exists())
+        self.assertNotIn("nothing deployed", out)
+
+    def test_fresh_default_deploy_roundtrips_to_check(self):
+        # After the bootstrap deploy creates the claude home, the default check must
+        # report in sync (deploy -> check symmetry is preserved).
+        write_skill(self.repo, "c1", targets=["claude"], shared={"a.txt": "x\n"})
+        self.run_mode(sync.do_deploy, None, None)
+        code, out, _ = self.run_mode(sync.do_check, None, None)
+        self.assertEqual(code, sync.EXIT_OK, out)
+        self.assertIn("in sync", out)
+
+    def test_fresh_default_deploy_does_not_bootstrap_codex(self):
+        # A codex-only skill on a fresh machine is NOT force-installed by a bare deploy
+        # (we can't assume Codex is installed); it's noted instead. Only claude bootstraps.
+        write_skill(self.repo, "x1", targets=["codex"], shared={"a.txt": "x\n"})
+        code, out, _ = self.run_mode(sync.do_deploy, None, None)
+        self.assertEqual(code, sync.EXIT_OK, out)
+        self.assertFalse((self.codex / "x1").exists())
+        self.assertFalse(self.codex.exists())
+        self.assertIn("declares 'codex' but its home is absent", out)
+
+    def test_fresh_default_deploy_dual_bootstraps_claude_only(self):
+        # A dual-target skill on a fresh machine installs to claude (bootstrapped) and
+        # notes codex as absent — the claude half of the documented first-install works.
+        write_skill(self.repo, "dual", targets=["claude", "codex"],
+                    shared={"a.txt": "x\n"},
+                    overlays={"codex": {"agents/openai.yaml": "codex: yes\n"}})
+        code, out, _ = self.run_mode(sync.do_deploy, None, None)
+        self.assertEqual(code, sync.EXIT_OK, out)
+        self.assertTrue((self.claude / "dual" / "a.txt").exists())
+        self.assertFalse((self.claude / "dual" / "agents").exists())  # no codex overlay leak
+        self.assertFalse((self.codex / "dual").exists())
+        self.assertIn("declares 'codex' but its home is absent", out)
+
 
 # --------------------------------------------------------------------------- #
 # Check
@@ -391,6 +435,68 @@ class TestCapture(SyncTestBase):
         self.assertEqual(
             (self.repo / "dual" / "overlays" / "codex" / "agents" / "openai.yaml").read_text(),
             "codex: changed\n")
+
+    def test_capture_represents_shared_deletion_single_target(self):
+        # P2 regression: a live deletion of a shared file must be captured as a repo
+        # removal, not silently reported "already in sync" while the repo keeps the file.
+        self.mk_homes()
+        write_skill(self.repo, "solo", targets=["claude"],
+                    shared={"a.txt": "keep\n", "b.txt": "delete me\n"})
+        self.run_mode(sync.do_deploy, "claude", None)
+        # Delete b.txt from the live copy.
+        (self.claude / "solo" / "b.txt").unlink()
+        code, out, _ = self.run_mode(sync.do_capture, "claude", None)
+        self.assertEqual(code, sync.EXIT_OK, out)
+        self.assertIn("captured", out)
+        self.assertNotIn("already in sync", out)
+        # The repo file is gone; the surviving shared file is untouched.
+        self.assertFalse((self.repo / "solo" / "b.txt").exists())
+        self.assertTrue((self.repo / "solo" / "a.txt").exists())
+        # And a follow-up check now reports in sync (the drift is truly resolved).
+        code2, out2, _ = self.run_mode(sync.do_check, "claude", None)
+        self.assertEqual(code2, sync.EXIT_OK, out2)
+        self.assertIn("in sync", out2)
+
+    def test_capture_represents_overlay_deletion(self):
+        # Deleting a target-specific overlay file live removes only that target's repo
+        # overlay; shared content and the other target stay intact.
+        self._deploy_dual()
+        (self.codex / "dual" / "agents" / "openai.yaml").unlink()
+        code, out, _ = self.run_mode(sync.do_capture, "codex", None)
+        self.assertEqual(code, sync.EXIT_OK, out)
+        self.assertFalse(
+            (self.repo / "dual" / "overlays" / "codex" / "agents" / "openai.yaml").exists())
+        # Shared file still in the repo; capturing again is a no-op (in sync).
+        self.assertTrue((self.repo / "dual" / "scripts" / "run.sh").exists())
+        code2, out2, _ = self.run_mode(sync.do_check, "codex", None)
+        self.assertEqual(code2, sync.EXIT_OK, out2)
+
+    def test_capture_refuses_shared_deletion_that_would_corrupt_other_target(self):
+        # A shared file deleted in ONE target's live copy while the OTHER target still
+        # has it must be refused — removing it from the repo would break the sibling.
+        self._deploy_dual()
+        (self.claude / "dual" / "scripts" / "run.sh").unlink()  # codex still has it
+        before = (self.repo / "dual" / "scripts" / "run.sh").read_text()
+        code, out, err = self.run_mode(sync.do_capture, "claude", None)
+        self.assertEqual(code, sync.EXIT_ERROR)
+        self.assertIn("REFUSED", out)
+        self.assertIn("live[codex] still has them", out)
+        # Repo file untouched (nothing silently destroyed).
+        self.assertEqual((self.repo / "dual" / "scripts" / "run.sh").read_text(), before)
+
+    def test_capture_deletion_prunes_empty_dirs(self):
+        # After deleting the only file in a nested dir, capture removes the now-empty
+        # scaffolding rather than leaving an empty directory behind.
+        self.mk_homes()
+        write_skill(self.repo, "nested", targets=["claude"],
+                    shared={"top.txt": "x\n", "deep/only.txt": "y\n"})
+        self.run_mode(sync.do_deploy, "claude", None)
+        (self.claude / "nested" / "deep" / "only.txt").unlink()
+        code, out, _ = self.run_mode(sync.do_capture, "claude", None)
+        self.assertEqual(code, sync.EXIT_OK, out)
+        self.assertFalse((self.repo / "nested" / "deep" / "only.txt").exists())
+        self.assertFalse((self.repo / "nested" / "deep").exists())
+        self.assertTrue((self.repo / "nested" / "top.txt").exists())
 
 
 # --------------------------------------------------------------------------- #

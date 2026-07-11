@@ -30,8 +30,12 @@ Modes:
 Default target set (--check / --deploy, no --target): each skill's declared targets
 whose live home directory already exists. This is symmetric across check and deploy
 (so deploy->check round-trips cleanly) and never creates or nags about a product home
-that isn't present. An explicit --target forces that target (and, for deploy, creates
-its home). --target both = {claude, codex}; invalid for --capture.
+that isn't present — with ONE deploy-only exception: a bare `--deploy` always installs
+the baseline `claude` target (creating ~/.claude/skills if absent) so a first run on a
+fresh machine actually installs something instead of exiting 0 having done nothing.
+`codex` stays opt-in (deployed by default only if ~/.codex/skills already exists). An
+explicit --target forces that target (and, for deploy, creates its home). --target
+both = {claude, codex}; invalid for --capture.
 
 A "skill" = a top-level directory containing a SKILL.md. Repo infra (scripts/, hooks/,
 docs/, README.md, .git/) has no SKILL.md and is ignored.
@@ -336,9 +340,22 @@ def resolve_targets(arg_target):
     return [arg_target]
 
 
-def effective_targets(declared: list[str], requested) -> list[str]:
+def effective_targets(declared: list[str], requested, *, bootstrap: bool = False) -> list[str]:
+    """Resolve which of a skill's declared targets to act on.
+
+    requested is None (the default set) -> declared targets whose live home already
+    exists, so check and deploy stay symmetric (deploy -> check round-trips) and we
+    never nag about a product that isn't installed. EXCEPTION: with bootstrap=True
+    (default `--deploy`, no --target) the baseline `claude` target is always included
+    if declared, even when ~/.claude/skills does not exist yet — otherwise a bare
+    `python scripts/sync.py --deploy` on a fresh machine would select nothing and exit
+    0 having installed nothing, breaking the documented first-install path. `claude` is
+    the repo's baseline product; a missing claude home is created on deploy. `codex`
+    stays opt-in (only if its home already exists) since we can't assume it's installed.
+    """
     if requested is None:
-        return [t for t in declared if target_home(t).exists()]
+        return [t for t in declared
+                if target_home(t).exists() or (bootstrap and t == "claude")]
     return [t for t in requested if t in declared]
 
 
@@ -497,7 +514,7 @@ def do_deploy(arg_target, only=None) -> int:
         except ValueError as e:
             eprint(f"error: {e}")
             return EXIT_ERROR
-        eff = effective_targets(declared, requested)
+        eff = effective_targets(declared, requested, bootstrap=True)
         warnings += check_no_literal_expansion(repo[name], name)
         # Materialize all targets first so an overlay-shadow error can't half-deploy.
         try:
@@ -592,10 +609,11 @@ def _capture_existing(name, skill_dir, target, live_dir):
 
     shared_manifest = shared_rel_files(skill_dir)
     overlay_manifest = overlay_rel_files(skill_dir, target)
+    live_files = live_rel_files(live_dir)
     writes: list[tuple[Path, bytes]] = []
     changed: list[Path] = []
     unclassifiable: list[str] = []
-    for rel in sorted(live_rel_files(live_dir)):
+    for rel in sorted(live_files):
         data = (live_dir / rel).read_bytes()
         if rel in overlay_manifest:
             dest = skill_dir / OVERLAY_DIR / target / rel
@@ -617,10 +635,81 @@ def _capture_existing(name, skill_dir, target, live_dir):
                 f"repo (shared vs overlays/<target>/) before capturing.",
                 [])
 
+    # Deletions: a repo file that belongs to THIS target's materialized set (shared
+    # content or this target's overlay) but is absent from the live copy is a live
+    # deletion. Without representing it, capture would leave the repo file in place and
+    # report the skill "already in sync" with exit 0, while --check keeps flagging the
+    # same missing-live drift forever. Removing an OVERLAY file only affects this target
+    # and is always safe. Removing a SHARED file affects every target; if any OTHER
+    # declared target still has that file live, deleting it from the repo would corrupt
+    # that target's next deploy — so refuse rather than silently break the sibling.
+    overlay_deletes: list[Path] = []
+    shared_deletes: list[Path] = []
+    unsafe_shared: list[tuple[str, str]] = []  # (rel, other_target_still_holding_it)
+    for rel in sorted(overlay_manifest - live_files):
+        overlay_deletes.append(skill_dir / OVERLAY_DIR / target / rel)
+    for rel in sorted(shared_manifest - live_files):
+        holders = []
+        for t2 in declared:
+            if t2 == target:
+                continue
+            h2 = target_home(t2)
+            live2 = h2 / name
+            if h2.exists() and live2.exists() and rel in live_rel_files(live2):
+                holders.append(t2)
+        if holders:
+            unsafe_shared.append((rel, holders[0]))
+        else:
+            shared_deletes.append(skill_dir / rel)
+
+    if unsafe_shared:
+        rels = [r for r, _ in unsafe_shared][:6]
+        holder = unsafe_shared[0][1]
+        return (False,
+                f"{name}: shared file(s) {rels} were deleted in live[{target}] but "
+                f"live[{holder}] still has them — removing them from the repo would "
+                f"corrupt live[{holder}]. Delete them there too, or reconcile manually.",
+                [])
+
+    deletes = overlay_deletes + shared_deletes
+    if not writes and not deletes:
+        return (True, "", [])
+
     for dest, data in writes:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
+    for dest in deletes:
+        try:
+            dest.unlink()
+        except OSError:
+            pass
+        _prune_empty_dirs(dest.parent, skill_dir)
+        changed.append(dest)
     return (True, "", changed)
+
+
+def _prune_empty_dirs(start: Path, stop: Path) -> None:
+    """Remove now-empty directories from `start` upward, never removing `stop` itself
+    or anything above it (so a captured deletion doesn't leave empty scaffolding)."""
+    try:
+        stop = stop.resolve()
+        cur = start.resolve()
+    except OSError:
+        return
+    while cur != stop and stop in cur.parents:
+        try:
+            next(cur.iterdir())
+            return  # not empty
+        except StopIteration:
+            pass
+        except OSError:
+            return
+        parent = cur.parent
+        try:
+            cur.rmdir()
+        except OSError:
+            return
+        cur = parent
 
 
 def do_capture(arg_target, only=None) -> int:

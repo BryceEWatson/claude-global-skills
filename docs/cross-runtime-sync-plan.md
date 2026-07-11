@@ -120,10 +120,18 @@ symmetric across check and deploy, so `--deploy` then `--check` is round-trip
 stable, and a machine with no `~/.codex/skills` is never touched or nagged about
 Codex. An explicit `--target` **forces** that target (creating its home on deploy).
 
+**Fresh-machine bootstrap (deploy only).** A bare `python scripts/sync.py --deploy`
+on a machine that has *no* skills home yet always installs the baseline **`claude`**
+target — creating `~/.claude/skills` if it is absent — so the documented first-install
+path actually installs something instead of matching nothing and exiting 0. `codex`
+stays opt-in (deployed by default only when `~/.codex/skills` already exists), because
+we can't assume Codex is installed. `--check` is unchanged (never creates a home), so
+after the bootstrap deploy the claude home exists and check round-trips cleanly.
+
 | Command | Default target set | Behavior |
 |---|---|---|
 | `sync.py --check [--target claude\|codex\|both] [--skill N]` | declared ∩ homes-that-exist | Read-only drift report: live vs **forward-materialized** expected output, per target, **LF-normalized**. Skips a declared target whose home is absent (informational note). Exit 3 on drift; `EXIT_ENV` only if no requested home exists. Live-only (unmanaged) skills are noted, never counted as drift. |
-| `sync.py --deploy [--target claude\|codex\|both] [--skill N]` | declared ∩ homes-that-exist | Materialize repo → live for skills declaring the target. Preserves live `.local-state/`; only touches `<home>/<skill>/`, so sibling/unrelated installed skills and other product homes are untouched. Prints per-skill which targets it wrote and which declared targets it skipped (home absent → run explicit `--target`). |
+| `sync.py --deploy [--target claude\|codex\|both] [--skill N]` | declared ∩ homes-that-exist, **plus `claude` always (bootstrap)** | Materialize repo → live for skills declaring the target. Preserves live `.local-state/`; only touches `<home>/<skill>/`, so sibling/unrelated installed skills and other product homes are untouched. On a fresh machine a bare `--deploy` still creates `~/.claude/skills` and installs (never silently no-ops). Prints per-skill which targets it wrote and which declared targets it skipped (home absent → run explicit `--target`). |
 | `sync.py --capture --target claude\|codex [--skill N]` | **required (single target)** | Reverse-map one target's live copy → repo. **Refuses** on divergence or unclassifiable files (below). Writes file-by-file (never wipes the skill dir), leaving every other target's overlay untouched. Never touches git. |
 
 `--target both` is invalid for `--capture`. Backward compat: existing skills default
@@ -142,11 +150,22 @@ substitution**, LF-normalized) is classified:
    `overlays/<target>/`) and re-run. Never guess (prevents a Codex-only file leaking
    into shared, or a shared file being siloed to one target).
 
-Capture never deletes repo files that are absent from live; it only writes classified
-live files, so a repo shared file missing from a live copy is left as-is, and
-`overlays/<other>/` plus unrelated repo content are untouched. (Skill-level cases —
-a repo skill with no live copy for the target, or a live-only skill — are surfaced as
-notes.)
+**Capture represents live deletions.** A repo file that belongs to target `T`'s
+materialized set (shared content, or a file under `overlays/T/`) but is **absent from
+the live copy** is a live deletion, and capture removes it from the repo — otherwise
+`--capture` would report the skill "already in sync" (exit 0) while `--check` kept
+flagging the same missing-live drift forever. Two safety rules bound this:
+
+- Removing an **overlay** file (`overlays/T/rel`) affects only target `T`, so it is
+  always applied; now-empty directories are pruned.
+- Removing a **shared** file affects *every* target. If any **other** declared target
+  still has that file in its live copy, deleting it from the repo would corrupt that
+  sibling's next deploy — so capture **REFUSES** the whole skill with an explicit
+  message (delete it in the sibling too, or reconcile manually) and writes nothing.
+
+`overlays/<other>/` and unrelated repo content are always untouched. (Skill-level
+cases — a repo skill with no live copy for the target, or a live-only skill — are
+still surfaced as notes, never auto-deleted.)
 
 ## Divergence guard (capture safety)
 
@@ -234,7 +253,9 @@ reports `active`, not `stalled`.
   anchored to the exact expansion and guarded by the "no literal expansion in shared"
   assertion.
 - **Symmetric default** (declared ∩ homes-that-exist) for check and deploy kills the
-  phantom-drift loop the asymmetric draft created.
+  phantom-drift loop the asymmetric draft created. The one asymmetry — deploy's
+  fresh-machine `claude` bootstrap — is deploy-only and never affects `--check`, so the
+  round-trip stays stable once the home exists.
 - **Verify-then-deploy** replaces the draft's deploy-then-check ordering so a lossy
   import can't clobber the validated Codex skill unnoticed.
 - Every comparison is **LF-normalized**; test **home seams** added; frontmatter
