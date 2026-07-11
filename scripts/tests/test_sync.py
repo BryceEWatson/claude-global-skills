@@ -235,6 +235,26 @@ class TestDeploy(SyncTestBase):
         self.assertTrue((unrel / "SKILL.md").exists())
         self.assertEqual((sib / "cfg").read_text(), "system")
 
+    def test_incomplete_deploy_is_reported_not_silent(self):
+        # Simulate a write that couldn't fully apply (e.g. a locked child on Windows):
+        # the post-deploy verification must surface it loudly and return EXIT_DRIFT,
+        # never a silent EXIT_OK success over a stale live copy.
+        self.mk_homes()
+        write_skill(self.repo, "c1", targets=["claude"],
+                    shared={"a.txt": "x\n", "b.txt": "y\n"})
+        orig = sync._write_materialized
+
+        def partial(dst, files):
+            orig(dst, {k: v for k, v in files.items() if k != "b.txt"})
+
+        sync._write_materialized = partial
+        try:
+            code, out, err = self.run_mode(sync.do_deploy, "claude", None)
+        finally:
+            sync._write_materialized = orig
+        self.assertEqual(code, sync.EXIT_DRIFT)
+        self.assertIn("deploy did not fully apply", err)
+
 
 # --------------------------------------------------------------------------- #
 # Check

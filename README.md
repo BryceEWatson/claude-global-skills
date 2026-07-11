@@ -93,6 +93,19 @@ refuses to silently resolve a divergence between two live copies. Contributors d
 need the maintainer's live tree — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
 outside-contributor path, the test commands, and the merge gate.
 
+**Optional drift nudge.** `hooks/skills_drift_hook.py` reminds you to reconcile a
+skill you edited in a live tree. It's a `PostToolUse` hook — register it in
+`~/.claude/settings.json` (point `CLAUDE_GLOBAL_SKILLS_REPO` at your checkout):
+
+```json
+{ "hooks": { "PostToolUse": [ { "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+  "hooks": [ { "type": "command",
+    "command": "python \"$HOME/Projects/claude-global-skills/hooks/skills_drift_hook.py\"" } ] } ] } }
+```
+
+It's non-blocking (always exits 0), target-aware (Claude or Codex), and silenced with
+`CLAUDE_SKILLS_DRIFT_HOOK=0`.
+
 ### Cross-runtime targets (Claude Code + Codex)
 
 A skill declares where it installs with an optional top-level `targets:` key in its

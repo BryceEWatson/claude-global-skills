@@ -490,6 +490,7 @@ def do_deploy(arg_target, only=None) -> int:
     deployed: dict[str, list[str]] = {}
     skipped_notes: list[str] = []
     warnings: list[str] = []
+    incomplete: list[str] = []
     for name in names:
         try:
             declared = read_frontmatter_targets(repo[name] / "SKILL.md")
@@ -509,6 +510,14 @@ def do_deploy(arg_target, only=None) -> int:
             home.mkdir(parents=True, exist_ok=True)
             _write_materialized(home / name, files)
             deployed.setdefault(t, []).append(name)
+            # Verify the write actually applied — _write_materialized tolerates a
+            # locked/undeletable child (Windows), so a deploy that couldn't fully
+            # apply must be surfaced loudly, not reported as a silent success.
+            a, r, c = diff_target(name, repo[name], t)
+            if a or r or c:
+                incomplete.append(f"{name} [{t}]: deploy did not fully apply "
+                                  f"({len(a) + len(r) + len(c)} residual file(s); a live "
+                                  f"file may be locked or undeletable) — re-run or check")
         if requested is None:
             for t in declared:
                 if t not in eff:
@@ -524,9 +533,13 @@ def do_deploy(arg_target, only=None) -> int:
                   f"{', '.join(sorted(deployed[t]))}")
     for n in skipped_notes:
         print(f"note: {n}")
+    for w in incomplete:
+        eprint(f"! deploy-incomplete: {w}")
     if not deployed:
         print("nothing deployed (no skill declares an available target).")
-    return EXIT_OK
+    # A deploy that could not fully apply is not a success — report it as drift so
+    # tooling (and the operator) notice rather than trusting a stale live copy.
+    return EXIT_DRIFT if incomplete else EXIT_OK
 
 
 # --------------------------------------------------------------------------- #

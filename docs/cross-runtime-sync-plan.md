@@ -142,9 +142,11 @@ substitution**, LF-normalized) is classified:
    `overlays/<target>/`) and re-run. Never guess (prevents a Codex-only file leaking
    into shared, or a shared file being siloed to one target).
 
-Capture never deletes repo files that are absent from live (surfaces them as a note,
-like the old engine). It writes only classified files, so `overlays/<other>/` and
-unrelated repo content are untouched.
+Capture never deletes repo files that are absent from live; it only writes classified
+live files, so a repo shared file missing from a live copy is left as-is, and
+`overlays/<other>/` plus unrelated repo content are untouched. (Skill-level cases —
+a repo skill with no live copy for the target, or a live-only skill — are surfaced as
+notes.)
 
 ## Divergence guard (capture safety)
 
