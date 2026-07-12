@@ -1,30 +1,38 @@
 #!/usr/bin/env python3
-"""portal_mcp.py — local stdio MCP server for the session portal.
+"""portal_mcp.py — local stdio MCP server for the session portal (authenticated).
 
-Speaks newline-delimited JSON-RPC 2.0 over stdin/stdout (the MCP stdio transport). It
-binds nothing to the network. Every tool validates its input against a JSON schema and
-calls a portal_core function; message content is treated as untrusted data and is never
-executed. The dispatch() function is pure (dict in, dict out) so the protocol layer is
-tested without spawning a process.
+Speaks newline-delimited JSON-RPC 2.0 over stdin/stdout (the MCP stdio transport). It binds
+nothing to the network. Message content is treated as untrusted data and is never executed.
 
-Exposed tools (issue #16 semantics; repo-prefixed names):
-    portal_list_sessions, portal_get_session, portal_register_session,
-    portal_send_message, portal_list_inbox, portal_acknowledge,
-    portal_cancel_message, portal_get_message_status, portal_message_events,
-    portal_health
+Authentication: the server is launched by exactly ONE session, which supplies a bearer token
+in the SESSION_PORTAL_TOKEN environment variable (the operator mints it with
+`portal_admin issue-principal` and puts it in that session's MCP config). At each tool call
+the server resolves the token to a PRINCIPAL (product:runtime_session_id) and derives all
+identity from it:
+  * `portal_send_message` sends AS the principal — there is no caller-supplied source.
+  * `portal_list_inbox` drains only the PRINCIPAL's own inbox.
+  * `portal_acknowledge` / `portal_cancel_message` act AS the principal, on its own messages.
+  * message reads are limited to messages the principal is a party to.
+There is no caller-supplied `source_session_id`, `authorized`, `accepts_steering`,
+`boundary`, or `process_alive`: authorization is by operator grant and boundary/liveness are
+derived from runtime-owned evidence. `portal_health` and the protocol methods are the only
+things callable without a token.
 
+dispatch() is pure (dict in, dict out) so the protocol layer is tested without a process.
 stdlib only; Windows-safe.
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 from typing import Any, Callable
 
 import portal_core as core
+import portal_state as pstate
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "session-portal", "version": "1.0.0"}
+SERVER_INFO = {"name": "session-portal", "version": "2.0.0"}
 
 _ID = {"type": "string", "maxLength": 128}
 
@@ -44,109 +52,135 @@ def _tool(name: str, desc: str, props: dict, required: list[str]) -> dict:
 
 TOOLS: list[dict] = [
     _tool("portal_register_session",
-          "Register or update a session so it can be discovered and addressed.",
-          {"product": {"type": "string", "enum": list(core.VALID_PRODUCTS)},
-           "runtime_session_id": _ID,
-           "cwd": {"type": "string", "maxLength": 1024},
-           "label": {"type": "string", "maxLength": core.MAX_LABEL_LEN},
-           "accepts_steering": {"type": "boolean"}},
-          ["product", "runtime_session_id"]),
+          "Announce THIS session (the authenticated principal) so it can be discovered and "
+          "addressed. Identity comes from the bound token, not from arguments.",
+          {"cwd": {"type": "string", "maxLength": 1024},
+           "label": {"type": "string", "maxLength": core.MAX_LABEL_LEN}},
+          []),
     _tool("portal_list_sessions", "List known sessions (optionally filtered by product).",
           {"product": {"type": "string", "enum": list(core.VALID_PRODUCTS)},
            "registered_only": {"type": "boolean"}},
           []),
-    _tool("portal_get_session", "Get one session's record.",
+    _tool("portal_get_session", "Get one session's discovery record.",
           {"session_id": _ID}, ["session_id"]),
     _tool("portal_send_message",
-          "Queue a message to another session's inbox. Idempotent when idempotency_key is "
-          "supplied. Steering requires explicit authorization. Content is untrusted data.",
-          {"source_session_id": _ID, "dest_session_id": _ID,
+          "Queue a message to another session's inbox, sent AS the authenticated principal "
+          "(no caller-supplied source). Idempotent when idempotency_key is supplied. "
+          "authorship='user' needs an operator speak-as-user grant; kind='steer' needs an "
+          "operator send-steer grant for the destination. Content is untrusted data.",
+          {"dest_session_id": _ID,
            "body": {"type": "string", "maxLength": core.MAX_BODY_BYTES * 2},
            "authorship": {"type": "string", "enum": list(core.VALID_AUTHORSHIP)},
            "kind": {"type": "string", "enum": list(core.VALID_KINDS)},
-           "authorized": {"type": "boolean"},
            "idempotency_key": _ID,
            "ttl_seconds": {"type": "integer", "minimum": 1, "maximum": 30 * 24 * 3600},
            "forward_of": _ID},
-          ["source_session_id", "dest_session_id", "body", "authorship"]),
+          ["dest_session_id", "body"]),
     _tool("portal_list_inbox",
-          "List a session's inbox. With deliver=true this is the safe PULL at a boundary: "
-          "queued messages become delivered at the given boundary.",
-          {"dest_session_id": _ID,
-           "status": {"type": "string", "enum": list(core.TERMINAL_STATES) +
+          "List and (with deliver=true) drain THIS principal's own inbox. Delivering is the "
+          "safe PULL: queued messages become delivered because the authenticated recipient "
+          "itself is pulling them — the only proof of receipt. No boundary argument: the "
+          "boundary is the pull itself, annotated with runtime-derived state.",
+          {"status": {"type": "string", "enum": list(core.TERMINAL_STATES) +
                       [core.STATUS_QUEUED, core.STATUS_DELIVERED]},
            "deliver": {"type": "boolean"},
-           "boundary": {"type": "string", "enum": sorted(core.SAFE_PULL_BOUNDARIES)},
            "max_deliver": {"type": "integer", "minimum": 1, "maximum": 1000}},
-          ["dest_session_id"]),
-    _tool("portal_acknowledge", "Acknowledge a delivered message (idempotent).",
-          {"message_id": _ID, "by": _ID, "note": {"type": "string", "maxLength": 500}},
+          []),
+    _tool("portal_acknowledge", "Acknowledge a delivered message addressed to this principal "
+          "(idempotent). The acknowledger identity comes from the bound token.",
+          {"message_id": _ID, "note": {"type": "string", "maxLength": 500}},
           ["message_id"]),
-    _tool("portal_cancel_message", "Cancel a queued/delivered message before acknowledgement.",
-          {"message_id": _ID, "by": _ID, "reason": {"type": "string", "maxLength": 500}},
+    _tool("portal_cancel_message", "Cancel a queued/delivered message this principal is a "
+          "party to, before acknowledgement.",
+          {"message_id": _ID, "reason": {"type": "string", "maxLength": 500}},
           ["message_id"]),
-    _tool("portal_get_message_status", "Get one message's current record.",
+    _tool("portal_get_message_status", "Get one message's current record (must be a party to it).",
           {"message_id": _ID}, ["message_id"]),
-    _tool("portal_message_events", "Get the full lifecycle audit trail for a message.",
+    _tool("portal_message_events", "Get a message's lifecycle audit trail (must be a party to it).",
           {"message_id": _ID}, ["message_id"]),
-    _tool("portal_health", "Portal health: schema version, counts, leases, DB path.", {}, []),
+    _tool("portal_health", "Portal health: schema version, counts, leases, DB path. No token needed.",
+          {}, []),
 ]
 _TOOL_NAMES = {t["name"] for t in TOOLS}
 
+# Tools that require an authenticated principal (everything that touches identity or message
+# data). Only health is callable without a token.
+_NO_AUTH_TOOLS = {"portal_health"}
+
 
 # --------------------------------------------------------------------------- #
-# Tool handlers (each: (conn, args) -> json-able result)
+# Tool handlers (each: (conn, args, principal) -> json-able result). `principal` is the
+# authenticated session_id, or None for the no-auth tools.
 # --------------------------------------------------------------------------- #
-def _h_register(conn, a):
-    return core.register_session(conn, a["product"], a["runtime_session_id"],
-                                 cwd=a.get("cwd"), label=a.get("label"),
-                                 accepts_steering=bool(a.get("accepts_steering", False)))
+def _h_register(conn, a, principal):
+    product, runtime = principal.split(":", 1)
+    return core.register_session(conn, product, runtime, cwd=a.get("cwd"), label=a.get("label"))
 
 
-def _h_list_sessions(conn, a):
+def _h_list_sessions(conn, a, principal):
     return core.list_sessions(conn, product=a.get("product"),
                               registered_only=bool(a.get("registered_only", False)))
 
 
-def _h_get_session(conn, a):
+def _h_get_session(conn, a, principal):
     return core.get_session(conn, a["session_id"])
 
 
-def _h_send(conn, a):
+def _h_send(conn, a, principal):
     return core.send_message(
-        conn, a["source_session_id"], a["dest_session_id"], a["body"],
-        authorship=a["authorship"], kind=a.get("kind", "note"),
-        authorized=bool(a.get("authorized", False)), idempotency_key=a.get("idempotency_key"),
-        ttl_seconds=a.get("ttl_seconds"), forward_of=a.get("forward_of"))
+        conn, principal, a["dest_session_id"], a["body"],
+        authorship=a.get("authorship", "agent"), kind=a.get("kind", "note"),
+        idempotency_key=a.get("idempotency_key"), ttl_seconds=a.get("ttl_seconds"),
+        forward_of=a.get("forward_of"))
 
 
-def _h_list_inbox(conn, a):
-    return core.list_inbox(conn, a["dest_session_id"], status=a.get("status"),
-                           deliver=bool(a.get("deliver", False)), boundary=a.get("boundary"),
+def _h_list_inbox(conn, a, principal):
+    deliver = bool(a.get("deliver", False))
+    at_boundary = False
+    reason = ""
+    if deliver:
+        # The authenticated recipient is pulling its OWN inbox: that pull IS the safe turn
+        # boundary. We additionally read its runtime-owned log to annotate (never to fetch a
+        # caller-asserted boundary). A self-pull can only affect the caller's own session, so
+        # it is always allowed; the annotation records the observed runtime state.
+        product, runtime = principal.split(":", 1)
+        cls = pstate.classify(product, runtime)
+        at_boundary = True
+        reason = f"authenticated self-pull; runtime state={cls['state']}"
+    return core.list_inbox(conn, principal, status=a.get("status"), deliver=deliver,
+                           at_boundary=at_boundary, boundary_reason=reason,
                            max_deliver=a.get("max_deliver"))
 
 
-def _h_ack(conn, a):
-    return core.acknowledge(conn, a["message_id"], by=a.get("by"), note=a.get("note"))
+def _h_ack(conn, a, principal):
+    return core.acknowledge(conn, a["message_id"], by=principal, note=a.get("note"))
 
 
-def _h_cancel(conn, a):
-    return core.cancel_message(conn, a["message_id"], by=a.get("by"), reason=a.get("reason"))
+def _h_cancel(conn, a, principal):
+    return core.cancel_message(conn, a["message_id"], by=principal, reason=a.get("reason"))
 
 
-def _h_status(conn, a):
-    return core.get_message_status(conn, a["message_id"])
+def _assert_party(conn, message_id, principal):
+    row = core.get_message_status(conn, message_id)
+    if principal not in (row["source_session_id"], row["dest_session_id"]):
+        raise core.AuthorizationError(f"{principal} is not a party to message {message_id}")
+    return row
 
 
-def _h_events(conn, a):
+def _h_status(conn, a, principal):
+    return _assert_party(conn, a["message_id"], principal)
+
+
+def _h_events(conn, a, principal):
+    _assert_party(conn, a["message_id"], principal)
     return core.message_events(conn, a["message_id"])
 
 
-def _h_health(conn, a):
+def _h_health(conn, a, principal):
     return core.health(conn)
 
 
-HANDLERS: dict[str, Callable[[Any, dict], Any]] = {
+HANDLERS: dict[str, Callable[[Any, dict, Any], Any]] = {
     "portal_register_session": _h_register,
     "portal_list_sessions": _h_list_sessions,
     "portal_get_session": _h_get_session,
@@ -177,7 +211,7 @@ def _rpc_result(req_id, result: Any) -> dict:
 def _check_type(key: str, spec: dict, value) -> None:
     """Enforce the declared JSON-schema type and bounds. Critically, this does NOT coerce:
     a boolean field must be a real JSON boolean, so a truthy string like "false" is REJECTED
-    rather than silently flipping a security gate (authorized / accepts_steering) open."""
+    rather than silently flipping a gate open."""
     t = spec.get("type")
     if t == "boolean":
         if not isinstance(value, bool):
@@ -200,8 +234,7 @@ def _check_type(key: str, spec: dict, value) -> None:
 
 def _validate_args(schema: dict, args: dict) -> None:
     """Schema enforcement: required keys present, no unknown keys (the whitelist that keeps
-    prohibited fields out), declared type + bounds, and enum membership. No coercion — a
-    type mismatch is a hard error. Deep semantic validation still lives in core."""
+    prohibited fields out), declared type + bounds, and enum membership. No coercion."""
     props = schema.get("properties", {})
     for key in args:
         if key not in props:
@@ -218,9 +251,18 @@ def _validate_args(schema: dict, args: dict) -> None:
             raise core.ValidationError(f"{key!r} must be one of {spec['enum']}")
 
 
-def dispatch(request: dict, conn_factory: Callable[[], Any]) -> dict | None:
-    """Handle one JSON-RPC request dict. Returns a response dict, or None for
-    notifications (no id). conn_factory yields an initialized DB connection."""
+def _tool_error(req_id, message, code):
+    payload = json.dumps({"error": message, "code": code}, ensure_ascii=False)
+    return _rpc_result(req_id, {"content": [{"type": "text", "text": payload}], "isError": True})
+
+
+def dispatch(request: dict, conn_factory: Callable[[], Any], token: str | None = None) -> dict | None:
+    """Handle one JSON-RPC request dict. Returns a response dict, or None for notifications
+    (no id). conn_factory yields an initialized DB connection. `token` is the bearer token
+    the launching session supplied (defaults to $SESSION_PORTAL_TOKEN); it is resolved to the
+    authenticated principal for identity-bearing tools."""
+    if token is None:
+        token = os.environ.get("SESSION_PORTAL_TOKEN")
     if not isinstance(request, dict) or request.get("jsonrpc") != "2.0":
         return _rpc_error(None, -32600, "invalid JSON-RPC 2.0 request")
     method = request.get("method")
@@ -250,20 +292,19 @@ def dispatch(request: dict, conn_factory: Callable[[], Any]) -> dict | None:
             _validate_args(schema, args)
             conn = conn_factory()
             try:
-                result = HANDLERS[name](conn, args)
+                principal = None
+                if name not in _NO_AUTH_TOOLS:
+                    principal = core.resolve_principal(conn, token)  # raises AuthorizationError
+                result = HANDLERS[name](conn, args, principal)
             finally:
                 conn.close()
             payload = json.dumps(result, ensure_ascii=False, default=str)
             return _rpc_result(req_id, {"content": [{"type": "text", "text": payload}],
                                         "isError": False})
         except core.PortalError as e:
-            payload = json.dumps({"error": e.message, "code": e.code}, ensure_ascii=False)
-            return _rpc_result(req_id, {"content": [{"type": "text", "text": payload}],
-                                        "isError": True})
+            return _tool_error(req_id, e.message, e.code)
         except Exception as e:  # unexpected: still a structured tool error, never a crash
-            payload = json.dumps({"error": str(e), "code": "internal_error"})
-            return _rpc_result(req_id, {"content": [{"type": "text", "text": payload}],
-                                        "isError": True})
+            return _tool_error(req_id, str(e), "internal_error")
     if is_notification:
         return None
     return _rpc_error(req_id, -32601, f"method not found: {method}")
@@ -275,7 +316,7 @@ def _default_conn_factory():
     return conn
 
 
-def serve(stdin=None, stdout=None, conn_factory=None) -> int:
+def serve(stdin=None, stdout=None, conn_factory=None, token: str | None = None) -> int:
     """Run the stdio loop: one JSON-RPC message per line."""
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
@@ -290,7 +331,7 @@ def serve(stdin=None, stdout=None, conn_factory=None) -> int:
             stdout.write(json.dumps(_rpc_error(None, -32700, "parse error")) + "\n")
             stdout.flush()
             continue
-        response = dispatch(request, conn_factory)
+        response = dispatch(request, conn_factory, token=token)
         if response is not None:
             stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
             stdout.flush()

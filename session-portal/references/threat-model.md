@@ -11,13 +11,23 @@ blocks, and what it deliberately cannot do.
 
 ## Trust boundaries
 
+- **Identity is authenticated, not asserted.** A caller proves who it is with a bearer token
+  that resolves to a principal (`product:runtime_session_id`); only the token's salted hash
+  is stored. The message source, the inbox owner, and the acknowledger are all derived from
+  that principal server-side — never from a tool argument. A session cannot send as another,
+  read another's inbox, or acknowledge another's message. Tokens expire and are revocable.
+- **Authorization is an operator grant, not a caller boolean.** Sending steering, accepting
+  steering, and recording `authorship=user` are operator-issued capabilities (scoped to a
+  counterparty, expiring, revocable). There is no caller-supplied `authorized` flag, so a
+  compromised or over-eager caller cannot flip a security gate open.
 - **Message content is untrusted data.** The portal never executes it, never interprets it
   as a command, and never uses it to approve a permission, publish, merge, push, or delete
   anything. Delivery returns the text and its author label; the receiving assistant acts
   under its own normal gates.
-- **Authorship is recorded.** Every message is marked `user` (a person wrote it) or `agent`
-  (an assistant is suggesting it). A recipient can weigh an agent suggestion differently
-  from a human instruction.
+- **Authorship is a vouched claim, distinct from the authenticated sender.** A message
+  records both the proven `source_session_id` and an `authorship` label (`user` vs `agent`).
+  `agent` is the default; `user` is only recordable with an operator `speak-as-user` grant,
+  so the label is something the operator vouched for, not a free assertion.
 - **The two products keep their own gates.** The portal coordinates; it does not bypass any
   product's permission, publication, or safety controls.
 
@@ -47,14 +57,18 @@ policy is **reject** (a clear, testable line) rather than silent redaction.
 
 ## Delivery safety
 
-- **A quiet transcript does not prove idleness.** A log that merely stopped, with no
-  explicit end-of-turn marker, is classified `unknown`, and `unknown` is not deliverable —
-  the message waits.
-- **An active session is never interrupted.** Push delivery is refused unless the recipient
-  is provably `idle` or `waiting-for-user`.
-- **Resuming is a last resort.** `claude --resume` is used only when the target is proven
-  closed and a destination lease is held, and it never resumes an active interactive
-  session. It defaults to a dry-run.
+- **Delivery is pull-only.** A message becomes `delivered` only when its authenticated
+  recipient pulls its own inbox. That pull is the only proof of receipt, so the portal never
+  fabricates a `delivered`, `resumed`, or native-delivered receipt it cannot back with a real
+  pull. There is no sender-side push and no caller-supplied delivery boundary.
+- **Boundary and liveness come from runtime-owned evidence.** The state classifier reads a
+  session's own append-only log (read-only) plus optional host liveness evidence written by a
+  runtime hook — never a caller-asserted `boundary` or `process_alive`. A quiet transcript
+  with no end-of-turn marker is `unknown` (not deliverable via any advisory push).
+- **Another session is never interrupted or resumed.** The portal has no code path that
+  pushes into, or resumes, another session. `resume_plan` only *describes* an operator
+  `claude --resume` command for a proven-closed session; running it is a human decision, and
+  the message is still delivered only when the resumed session pulls it.
 - **Loops are prevented.** A session can't message itself; forwarding is depth-capped; and
   an agent-authored message can't be forwarded straight back to its origin (ping-pong).
 
@@ -63,7 +77,9 @@ policy is **reject** (a clear, testable line) rather than silent redaction.
 The portal deliberately does **not**:
 
 - write to or tail-inject any transcript JSONL, or open a second writer on one;
-- resume, steer, or inject into an **active** session;
+- push into, resume, steer, or inject into **any** session — delivery is pull-only;
+- claim a delivery/resume/native receipt it cannot back with a real recipient pull;
+- let a caller assert its own identity or set an authorization flag;
 - use Codex `turn/steer`, raw history injection, or a separately launched app-server as an
   idleness oracle;
 - approve permissions, publish, merge, push, or delete on another session's behalf;

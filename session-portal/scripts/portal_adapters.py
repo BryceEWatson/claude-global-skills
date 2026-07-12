@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
-"""portal_adapters.py — boundary-safe delivery adapters.
+"""portal_adapters.py — advisory classification for the PULL-ONLY portal.
 
-These sit between the durable queue (portal_core) and the two runtimes. They decide
-WHEN it is safe to hand a queued message over, and they always err toward leaving it
-queued. None of them writes a transcript or resumes a live session.
+The portal delivers on a single honest event: the AUTHENTICATED recipient pulls its own
+inbox (portal_core.list_inbox / deliver_one). That pull is the only proof of runtime
+acceptance, so it is the only thing that ever marks a message `delivered`.
 
-  push_deliver          Deliver only if the recipient is provably paused (idle /
-                        waiting-for-user). An active session is REFUSED; the message
-                        stays queued.
-  claude_resume_plan    The ONLY path that could touch a closed Claude session. It
-                        refuses unless the session is proven closed (completed) AND a
-                        destination lease is held. It never resumes an active session,
-                        and by default is a dry-run that returns a plan rather than
-                        spawning `claude --resume`.
-  codex_native_status   A local MCP server cannot assume access to host-only Codex task
-                        tools, so native task messaging is reported unavailable by
-                        default; delivery to Codex falls back to the durable queue, which
-                        Codex drains at a supported boundary (session-start / prompt-submit
-                        / stop / command / heartbeat).
+Everything in this module is therefore ADVISORY. None of it transitions a message, none of
+it writes a transcript, none of it resumes or spawns a session, and none of it fabricates a
+"delivered", "resumed", or "native-delivered" receipt the portal cannot back with a real
+pull. These helpers answer read-only questions ("is the recipient at a safe point?", "what
+would a resume command look like?") so a caller can decide whether to notify a human or wait.
+
+Why no push / auto-resume / native-task delivery in this MVP: each of those would have to
+CLAIM the recipient received the message without the recipient ever confirming it. That is
+exactly the false-receipt failure the audit flagged. Until there is a real runtime
+acceptance channel, delivery stays pull-only and these adapters stay advisory.
 
 stdlib only.
 """
@@ -30,107 +27,64 @@ import portal_core as core
 import portal_state as pstate
 
 
-def push_deliver(conn, message_id: str, product: str, runtime_session: str, *,
-                 process_alive: bool | None = None, holder: str | None = None,
-                 now: float | None = None) -> dict[str, Any]:
-    """Attempt a sender-side push. Classifies the recipient conservatively and refuses
-    unless it is push-deliverable (idle / waiting-for-user). Never delivers to an active
-    or unproven session."""
-    cls = pstate.classify(product, runtime_session, process_alive=process_alive, now=now)
-    holder = holder or f"push:{message_id}"
-    if not pstate.is_push_deliverable(cls["state"]):
-        core._log_event(conn, message_id,
-                        "delivery_refused", f"push refused: dest state={cls['state']} ({cls['reason']})")
-        out = core.get_message_status(conn, message_id)
-        out.update({"delivered": False, "dest_state": cls["state"],
-                    "refused_reason": cls["reason"]})
-        return out
-    res = core.deliver_one(conn, message_id, mode="push", boundary=None,
-                           dest_state=cls["state"], holder=holder)
-    res["dest_state"] = cls["state"]
-    return res
-
-
-def claude_resume_plan(conn, message_id: str, runtime_session: str, *,
-                       process_alive: bool | None = None, holder: str | None = None,
-                       execute: bool = False, now: float | None = None) -> dict[str, Any]:
-    """Guarded Claude `--resume` adapter. Delivers to a *closed* Claude session only.
-
-    Hard refusals (return without delivering, nothing spawned):
-      * session state is not `completed` (i.e. not proven closed) -> refuse. In
-        particular an `active` session is never resumed.
-      * a destination lease cannot be acquired -> refuse.
-    Even when both hold, `execute` defaults to False: we return the command plan rather
-    than launching a process, so resuming stays an explicit, operator-driven action.
-    """
-    cls = pstate.classify("claude", runtime_session, process_alive=process_alive, now=now)
-    holder = holder or f"resume:{message_id}"
-    if cls["state"] != pstate.COMPLETED:
-        core._log_event(conn, message_id, "delivery_refused",
-                        f"resume refused: session not proven closed (state={cls['state']})")
-        out = core.get_message_status(conn, message_id)
-        out.update({"delivered": False, "resumed": False, "dest_state": cls["state"],
-                    "refused_reason": f"not closed ({cls['state']})"})
-        return out
-    if not core.acquire_lease(conn, f"claude:{runtime_session}", holder):
-        out = core.get_message_status(conn, message_id)
-        out.update({"delivered": False, "resumed": False, "refused_reason": "lease_held"})
-        return out
-    try:
-        plan = ["claude", "--resume", runtime_session]
-        if not execute:
-            core._log_event(conn, message_id, "resume_planned",
-                            "dry-run: closed session + lease held; not spawned")
-            out = core.get_message_status(conn, message_id)
-            out.update({"delivered": False, "resumed": False, "dry_run": True,
-                        "resume_command": plan, "dest_state": cls["state"]})
-            return out
-        # A real spawn would go here, behind an explicit operator opt-in. We deliberately
-        # do not launch a process from this library; the message is marked delivered only
-        # once the resumed session pulls it. So even with execute=True we record intent
-        # and keep the message queued for the resumed session to drain.
-        core._log_event(conn, message_id, "resume_requested", f"cmd={' '.join(plan)}")
-        out = core.get_message_status(conn, message_id)
-        out.update({"delivered": False, "resumed": True, "resume_command": plan,
-                    "dest_state": cls["state"]})
-        return out
-    finally:
-        core.release_lease(conn, f"claude:{runtime_session}", holder)
-
-
-def codex_native_status() -> dict[str, Any]:
-    """Whether Codex native task messaging is usable from here. Default: unavailable.
-    Override only in a context that genuinely surfaces the task tool to a running,
-    authorized Codex task (set SESSION_PORTAL_CODEX_NATIVE=1)."""
-    available = os.environ.get("SESSION_PORTAL_CODEX_NATIVE") == "1"
+def classify_deliverability(product: str, runtime_session: str, *,
+                            now: float | None = None) -> dict[str, Any]:
+    """Read-only advisory: classify the recipient from its own runtime-owned log (and
+    host liveness evidence) and report whether a pull by that recipient would be a safe
+    moment. Never delivers, never writes anything. `would_pull_safely` is True when the
+    recipient is provably between turns (idle / waiting-for-user); an `active`, `unknown`,
+    `stale`, or `unavailable` recipient is reported as not-yet-safe so a caller waits."""
+    cls = pstate.classify(product, runtime_session, now=now)
     return {
-        "native_available": available,
-        "fallback": "durable_queue",
-        "note": ("native task messaging surfaced to the running task"
-                 if available else
-                 "no host-only Codex task tool; leaving delivery to the durable queue"),
+        "product": product,
+        "runtime_session": runtime_session,
+        "state": cls["state"],
+        "reason": cls["reason"],
+        "age_seconds": cls.get("age_seconds"),
+        "would_pull_safely": pstate.is_push_deliverable(cls["state"]),
+        "advisory_only": True,
+        "note": "the portal delivers only when the authenticated recipient pulls; this is advice, not delivery",
     }
 
 
-def codex_deliver(conn, message_id: str, runtime_session: str, *,
-                  boundary: str | None = None, now: float | None = None) -> dict[str, Any]:
-    """Deliver to Codex. If native messaging is unavailable (the default), the message is
-    left queued for Codex to drain at a supported boundary; only an explicit safe
-    boundary (a Codex-side pull) actually transitions it to delivered."""
-    status = codex_native_status()
-    if not status["native_available"]:
-        if boundary in core.SAFE_PULL_BOUNDARIES:
-            res = core.deliver_one(conn, message_id, mode="pull", boundary=boundary,
-                                   dest_state=None, holder=f"codex-pull:{runtime_session}")
-            res["via"] = "queue_boundary_pull"
-            return res
-        core._log_event(conn, message_id, "delivery_refused",
-                        "codex native unavailable; no safe boundary -> left queued")
-        out = core.get_message_status(conn, message_id)
-        out.update({"delivered": False, "via": "queue", "refused_reason": "no_native_no_boundary"})
-        return out
-    # Native path (only when genuinely surfaced): treat as an authorized boundary pull.
-    res = core.deliver_one(conn, message_id, mode="pull", boundary="command",
-                           dest_state=None, holder=f"codex-native:{runtime_session}")
-    res["via"] = "native_task_message"
-    return res
+def resume_plan(runtime_session: str, *, now: float | None = None) -> dict[str, Any]:
+    """Return an OPERATOR resume plan for a Claude session — a description only. This never
+    spawns `claude --resume`, never marks a message delivered or resumed, and is not on the
+    delivery path. It refuses to even suggest resuming unless the session is proven closed
+    (explicit turn-complete + host evidence the process is gone); an active or merely-idle
+    session yields no resume suggestion. Resuming is an explicit, human-driven action that
+    lives outside this pull-only MVP."""
+    cls = pstate.classify("claude", runtime_session, now=now)
+    if cls["state"] != pstate.COMPLETED:
+        return {
+            "resumable": False,
+            "state": cls["state"],
+            "reason": f"not proven closed (state={cls['state']}); no resume suggested",
+            "advisory_only": True,
+        }
+    return {
+        "resumable": True,
+        "state": cls["state"],
+        "suggested_command": ["claude", "--resume", runtime_session],
+        "advisory_only": True,
+        "note": ("operator action only: running this is a human decision; the message stays "
+                 "queued and is delivered only when the resumed session pulls it"),
+    }
+
+
+def codex_native_status() -> dict[str, Any]:
+    """Codex native task messaging is NOT implemented as a delivery channel in this MVP.
+
+    A local MCP server cannot prove a message was accepted by a running Codex task, so we do
+    not claim a native delivery. Delivery to Codex is via the durable queue, drained by an
+    authenticated Codex-side pull at a real boundary. The env var that previously forced a
+    synthetic "native delivered" receipt has been removed; if it is set we still report
+    native as unavailable rather than fabricate acceptance."""
+    forced = os.environ.get("SESSION_PORTAL_CODEX_NATIVE") == "1"
+    return {
+        "native_available": False,
+        "delivery_channel": "durable_queue_pull",
+        "note": ("native task messaging is not an implemented delivery channel; delivery to "
+                 "Codex happens when the Codex session pulls its inbox"),
+        "ignored_forcing_env": forced,
+    }

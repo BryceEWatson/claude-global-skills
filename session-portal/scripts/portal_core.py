@@ -2,17 +2,26 @@
 """portal_core.py — durable storage + lifecycle + validation for the session portal.
 
 The portal is a safe, local mailbox between Claude Code and Codex sessions. This module
-is the pure core: it owns the SQLite schema, the message lifecycle state machine, and
-every authorization / privacy / identifier check. It never touches a transcript, never
-launches or resumes a session, and never executes message content — delivery returns
-data only. The MCP transport (portal_mcp.py) and admin CLI (portal_admin.py) are thin
-wrappers over the functions here.
+is the pure core: it owns the SQLite schema, the message lifecycle state machine, the
+authenticated-principal + operator-grant model, and every authorization / privacy /
+identifier check. It never touches a transcript, never launches or resumes a session, and
+never executes message content — delivery returns data only. The MCP transport
+(portal_mcp.py) and admin CLI (portal_admin.py) are thin wrappers over the functions here.
 
 Safety invariants enforced here (see docs/session-portal-plan.md and references/):
-  * A message is untrusted DATA with a recorded author (user vs agent-suggestion).
-  * Steering (kind="steer") requires explicit authorization to send AND to deliver.
-  * Sends are idempotent when the caller supplies an idempotency key.
-  * Delivery to one destination is serialized by a lease; crashes never double-deliver.
+  * Identity is authenticated, not asserted. A caller proves who it is with a bearer token
+    that resolves to a PRINCIPAL (product:runtime_session_id). The message source, the
+    inbox owner, and the acknowledger are all derived from that principal server-side —
+    never taken from a tool argument.
+  * Authorization is an operator-issued GRANT, not a caller boolean. Sending steering,
+    accepting steering, and speaking as the user are capabilities the operator grants to a
+    principal (scoped + expiring + revocable). There is no caller-supplied `authorized`.
+  * A message is untrusted DATA with a recorded authorship claim AND an authenticated
+    sender principal (the two are distinct: the sender is proven, the authorship label is
+    a claim the operator vouches for via a grant).
+  * Delivery is PULL-ONLY: a message becomes `delivered` only when the authenticated
+    recipient itself pulls it. That is the only event that proves runtime acceptance. The
+    portal never fabricates a delivery/resume/native receipt it cannot back with a pull.
   * Prohibited content (reasoning, raw tool args, signatures, encrypted blobs, system/
     developer instructions, credentials/tokens/env, secrets) is rejected, not stored.
   * Loops / ping-pong are prevented by a forward-depth cap and a reversed-pair guard.
@@ -24,18 +33,27 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Callable
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 VALID_PRODUCTS = ("claude", "codex")
 VALID_AUTHORSHIP = ("user", "agent")
 VALID_KINDS = ("note", "steer")
+
+# Operator-issued capabilities (rows in auth_grants). These REPLACE the old caller-supplied
+# `authorized` / `accepts_steering` booleans: a caller can no longer flip a security gate.
+CAP_SEND_STEER = "send-steer"          # principal may SEND kind="steer" (scope = dest id or *)
+CAP_ACCEPT_STEERING = "accept-steering"  # principal may RECEIVE a steer (scope = source id or *)
+CAP_SPEAK_AS_USER = "speak-as-user"    # principal may record authorship="user" (scope = *)
+VALID_CAPABILITIES = (CAP_SEND_STEER, CAP_ACCEPT_STEERING, CAP_SPEAK_AS_USER)
 
 # Lifecycle states (see the state machine in _LEGAL_TRANSITIONS).
 STATUS_QUEUED = "queued"
@@ -56,17 +74,12 @@ _LEGAL_TRANSITIONS = {
     STATUS_FAILED: set(),
 }
 
-# Boundaries at which a recipient may safely PULL its own inbox (it is between turns).
-SAFE_PULL_BOUNDARIES = {"session_start", "prompt_submit", "stop", "command", "heartbeat"}
-# Destination states into which a message may be PUSHED (recipient paused but alive).
-# `completed` routes through the guarded resume adapter; `stale` intentionally waits in the
-# queue until its TTL (closure is unproven, so we neither push nor resume it).
-PUSH_DELIVERABLE_STATES = {"idle", "waiting-for-user"}
-
 MAX_BODY_BYTES = 4096
 MAX_LABEL_LEN = 256
 MAX_FORWARD_DEPTH = 1
 DEFAULT_TTL_SECONDS = 24 * 3600
+DEFAULT_PRINCIPAL_TTL_SECONDS = 12 * 3600
+DEFAULT_GRANT_TTL_SECONDS = 3600
 _ID_RE = re.compile(r"^[A-Za-z0-9._:\-]{1,128}$")
 _RUNTIME_ID_RE = re.compile(r"^[A-Za-z0-9._\-]{1,120}$")
 
@@ -181,9 +194,35 @@ CREATE TABLE IF NOT EXISTS sessions (
     registered_at       REAL,
     last_seen_at        REAL,
     last_state          TEXT NOT NULL DEFAULT 'unknown',
-    accepts_steering    INTEGER NOT NULL DEFAULT 0,
     meta                TEXT
 );
+
+-- An authenticated identity. A bearer token (only its salted hash is stored) resolves to
+-- exactly one principal; the MCP server binds to it at startup and derives all identity
+-- from it. Tokens are operator-minted, expiring, and revocable.
+CREATE TABLE IF NOT EXISTS principals (
+    session_id   TEXT PRIMARY KEY,
+    product      TEXT NOT NULL,
+    token_hash   TEXT NOT NULL,
+    created_at   REAL NOT NULL,
+    expires_at   REAL,
+    revoked      INTEGER NOT NULL DEFAULT 0,
+    label        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_principals_token ON principals(token_hash);
+
+-- Operator-issued capability grants (replace the old caller booleans). scope is a session
+-- id the capability is limited to, or '*' for any.
+CREATE TABLE IF NOT EXISTS auth_grants (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    grantee     TEXT NOT NULL,
+    capability  TEXT NOT NULL,
+    scope       TEXT NOT NULL DEFAULT '*',
+    created_at  REAL NOT NULL,
+    expires_at  REAL,
+    revoked     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_grants_lookup ON auth_grants(grantee, capability, revoked);
 
 CREATE TABLE IF NOT EXISTS messages (
     message_id          TEXT PRIMARY KEY,
@@ -194,13 +233,14 @@ CREATE TABLE IF NOT EXISTS messages (
     body                TEXT NOT NULL,
     authorship          TEXT NOT NULL,
     kind                TEXT NOT NULL,
-    authorized          INTEGER NOT NULL DEFAULT 0,
     status              TEXT NOT NULL DEFAULT 'queued',
     created_at          REAL NOT NULL,
     updated_at          REAL NOT NULL,
     expires_at          REAL,
     delivered_at        REAL,
+    delivered_to        TEXT,
     acknowledged_at     REAL,
+    acknowledged_by     TEXT,
     attempts            INTEGER NOT NULL DEFAULT 0,
     last_error          TEXT,
     forward_depth       INTEGER NOT NULL DEFAULT 0,
@@ -227,6 +267,10 @@ CREATE TABLE IF NOT EXISTS leases (
 """
 
 
+def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     """Create the schema if absent and run migrations. Idempotent."""
     conn.executescript(_SCHEMA)
@@ -235,14 +279,29 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
         return
     current = int(row["version"])
-    # Future migrations: while current < SCHEMA_VERSION: apply step; current += 1.
     if current > SCHEMA_VERSION:
         raise PortalError(
             f"database schema v{current} is newer than this code (v{SCHEMA_VERSION}); upgrade the portal",
             code="schema_too_new",
         )
-    if current != SCHEMA_VERSION:
+    while current < SCHEMA_VERSION:
+        _migrate_step(conn, current)
+        current += 1
+    if current != int(row["version"]):
         conn.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
+
+
+def _migrate_step(conn: sqlite3.Connection, from_version: int) -> None:
+    """Apply the migration from `from_version` to from_version+1. Additive only."""
+    if from_version == 1:
+        # v1 -> v2: principals + auth_grants (created by executescript above), and new
+        # message columns delivered_to / acknowledged_by. The legacy `authorized` column
+        # (a caller boolean) is left in place but no longer consulted — grants supersede it.
+        cols = _column_names(conn, "messages")
+        if "delivered_to" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN delivered_to TEXT")
+        if "acknowledged_by" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN acknowledged_by TEXT")
 
 
 # --------------------------------------------------------------------------- #
@@ -268,6 +327,13 @@ def product_of(session_id: str) -> str:
     if product not in VALID_PRODUCTS:
         raise ValidationError(f"session_id must start with a product prefix ({VALID_PRODUCTS})")
     return product
+
+
+def runtime_of(session_id: str) -> str:
+    _valid_id(session_id, "session_id")
+    if ":" not in session_id:
+        raise ValidationError("session_id must be product:runtime_session_id")
+    return session_id.split(":", 1)[1]
 
 
 def validate_no_prohibited_fields(payload: dict[str, Any]) -> None:
@@ -338,12 +404,152 @@ def _atomic(conn: sqlite3.Connection):
 
 
 # --------------------------------------------------------------------------- #
+# Principals (authenticated identity)
+# --------------------------------------------------------------------------- #
+def _token_salt() -> bytes:
+    """A machine-local salt so a stolen DB alone can't be brute-forced offline as easily.
+    Stored beside the DB (0600 where the OS supports it); created on first use."""
+    p = portal_home() / ".token-salt"
+    try:
+        return p.read_bytes()
+    except (FileNotFoundError, OSError):
+        salt = secrets.token_bytes(32)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "wb") as fh:
+            fh.write(salt)
+        with contextlib.suppress(OSError):
+            os.chmod(p, 0o600)
+        return salt
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(_token_salt() + token.encode("utf-8")).hexdigest()
+
+
+def issue_principal(conn: sqlite3.Connection, product: str, runtime_session_id: str, *,
+                    ttl_seconds: int | None = None, label: str | None = None) -> dict:
+    """Mint (or rotate) a bearer token for a session and record its salted hash. Returns the
+    principal record WITH the plaintext token under `token` — shown once; only the hash is
+    stored. Operator-only (admin CLI); never exposed as an MCP tool."""
+    session_id = make_session_id(product, runtime_session_id)
+    if label is not None and len(label) > MAX_LABEL_LEN:
+        raise ValidationError(f"label exceeds {MAX_LABEL_LEN} chars")
+    token = secrets.token_urlsafe(32)
+    th = hash_token(token)
+    ts = now()
+    ttl = ttl_seconds if ttl_seconds is not None else DEFAULT_PRINCIPAL_TTL_SECONDS
+    expires_at = ts + ttl if ttl and ttl > 0 else None
+    conn.execute(
+        """INSERT INTO principals(session_id, product, token_hash, created_at, expires_at, revoked, label)
+           VALUES (?,?,?,?,?,0,?)
+           ON CONFLICT(session_id) DO UPDATE SET
+                token_hash=excluded.token_hash, created_at=excluded.created_at,
+                expires_at=excluded.expires_at, revoked=0, label=COALESCE(excluded.label, principals.label)""",
+        (session_id, product, th, ts, expires_at, label),
+    )
+    out = dict(conn.execute("SELECT * FROM principals WHERE session_id=?", (session_id,)).fetchone())
+    out.pop("token_hash", None)
+    out["token"] = token
+    return out
+
+
+def resolve_principal(conn: sqlite3.Connection, token: str) -> str:
+    """Resolve a bearer token to its principal session_id. Raises AuthorizationError if the
+    token is unknown, expired, or revoked. Constant-time hash comparison."""
+    if not isinstance(token, str) or not (16 <= len(token) <= 512):
+        raise AuthorizationError("invalid or missing portal token")
+    th = hash_token(token)
+    ts = now()
+    for row in conn.execute("SELECT session_id, token_hash, expires_at, revoked FROM principals"):
+        if hmac.compare_digest(row["token_hash"], th):
+            if int(row["revoked"]):
+                raise AuthorizationError("portal token has been revoked")
+            if row["expires_at"] is not None and float(row["expires_at"]) < ts:
+                raise AuthorizationError("portal token has expired")
+            return row["session_id"]
+    raise AuthorizationError("portal token is not recognized")
+
+
+def revoke_principal(conn: sqlite3.Connection, session_id: str) -> bool:
+    _valid_id(session_id, "session_id")
+    cur = conn.execute("UPDATE principals SET revoked=1 WHERE session_id=?", (session_id,))
+    return (cur.rowcount or 0) > 0
+
+
+def list_principals(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT session_id, product, created_at, expires_at, revoked, label FROM principals "
+        "ORDER BY created_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+# --------------------------------------------------------------------------- #
+# Grants (operator-issued capabilities; scoped + expiring + revocable)
+# --------------------------------------------------------------------------- #
+def grant_capability(conn: sqlite3.Connection, grantee: str, capability: str, *,
+                     scope: str = "*", ttl_seconds: int | None = None) -> dict:
+    """Record an operator capability grant. Operator-only (admin CLI). scope='*' means any
+    counterparty; otherwise it is a specific session id the capability is limited to."""
+    _valid_id(grantee, "grantee")
+    if capability not in VALID_CAPABILITIES:
+        raise ValidationError(f"unknown capability {capability!r}; allowed: {list(VALID_CAPABILITIES)}")
+    if scope != "*":
+        _valid_id(scope, "scope")
+    ts = now()
+    ttl = ttl_seconds if ttl_seconds is not None else DEFAULT_GRANT_TTL_SECONDS
+    expires_at = ts + ttl if ttl and ttl > 0 else None
+    cur = conn.execute(
+        "INSERT INTO auth_grants(grantee, capability, scope, created_at, expires_at, revoked) "
+        "VALUES (?,?,?,?,?,0)", (grantee, capability, scope, ts, expires_at))
+    return {"id": cur.lastrowid, "grantee": grantee, "capability": capability,
+            "scope": scope, "expires_at": expires_at}
+
+
+def has_capability(conn: sqlite3.Connection, grantee: str, capability: str,
+                   scope: str | None = None) -> bool:
+    """True iff `grantee` holds a live (non-revoked, non-expired) grant for `capability`
+    whose scope is '*' or exactly matches `scope`."""
+    ts = now()
+    rows = conn.execute(
+        "SELECT scope, expires_at FROM auth_grants WHERE grantee=? AND capability=? AND revoked=0",
+        (grantee, capability)).fetchall()
+    for r in rows:
+        if r["expires_at"] is not None and float(r["expires_at"]) < ts:
+            continue
+        if r["scope"] == "*" or scope is None or r["scope"] == scope:
+            return True
+    return False
+
+
+def revoke_grant(conn: sqlite3.Connection, grant_id: int) -> bool:
+    cur = conn.execute("UPDATE auth_grants SET revoked=1 WHERE id=?", (int(grant_id),))
+    return (cur.rowcount or 0) > 0
+
+
+def list_grants(conn: sqlite3.Connection, grantee: str | None = None,
+                include_inactive: bool = False) -> list[dict]:
+    q = "SELECT * FROM auth_grants"
+    clauses, params = [], []
+    if grantee is not None:
+        clauses.append("grantee=?")
+        params.append(grantee)
+    if not include_inactive:
+        clauses.append("revoked=0")
+    if clauses:
+        q += " WHERE " + " AND ".join(clauses)
+    q += " ORDER BY created_at DESC"
+    return [dict(r) for r in conn.execute(q, params).fetchall()]
+
+
+# --------------------------------------------------------------------------- #
 # Sessions
 # --------------------------------------------------------------------------- #
 def register_session(conn: sqlite3.Connection, product: str, runtime_session_id: str,
                      cwd: str | None = None, label: str | None = None,
-                     meta: dict | None = None, accepts_steering: bool = False) -> dict:
-    """Register (or update) a session. Idempotent upsert keyed on session_id."""
+                     meta: dict | None = None) -> dict:
+    """Register (or update) a session. Idempotent upsert keyed on session_id. Note: whether
+    a session accepts steering is NO LONGER a flag here — it is an operator grant
+    (CAP_ACCEPT_STEERING). Registration only records discovery metadata."""
     session_id = make_session_id(product, runtime_session_id)
     if label is not None and len(label) > MAX_LABEL_LEN:
         raise ValidationError(f"label exceeds {MAX_LABEL_LEN} chars")
@@ -351,18 +557,16 @@ def register_session(conn: sqlite3.Connection, product: str, runtime_session_id:
     meta_json = json.dumps(meta) if meta is not None else None
     conn.execute(
         """INSERT INTO sessions(session_id, product, runtime_session_id, cwd, label,
-                registered, registered_at, last_seen_at, last_state, accepts_steering, meta)
-           VALUES (?,?,?,?,?,1,?,?,'unknown',?,?)
+                registered, registered_at, last_seen_at, last_state, meta)
+           VALUES (?,?,?,?,?,1,?,?,'unknown',?)
            ON CONFLICT(session_id) DO UPDATE SET
                 cwd=COALESCE(excluded.cwd, sessions.cwd),
                 label=COALESCE(excluded.label, sessions.label),
                 registered=1,
                 registered_at=COALESCE(sessions.registered_at, excluded.registered_at),
                 last_seen_at=excluded.last_seen_at,
-                accepts_steering=excluded.accepts_steering,
                 meta=COALESCE(excluded.meta, sessions.meta)""",
-        (session_id, product, runtime_session_id, cwd, label, ts, ts,
-         1 if accepts_steering else 0, meta_json),
+        (session_id, product, runtime_session_id, cwd, label, ts, ts, meta_json),
     )
     return get_session(conn, session_id)
 
@@ -417,7 +621,7 @@ def list_sessions(conn: sqlite3.Connection, product: str | None = None,
 
 
 # --------------------------------------------------------------------------- #
-# Sending (idempotent)
+# Sending (idempotent, identity + grant enforced)
 # --------------------------------------------------------------------------- #
 def _derive_idempotency_key(source: str, dest: str, provided: str | None) -> str:
     """The stored idempotency identity. A caller-supplied key is SCOPED to (source, dest)
@@ -427,7 +631,7 @@ def _derive_idempotency_key(source: str, dest: str, provided: str | None) -> str
     if provided is not None:
         _valid_id(provided, "idempotency_key")
         return f"{source}\x1f{dest}\x1f{provided}"
-    return "auto-" + os.urandom(16).hex()
+    return "auto-" + secrets.token_hex(16)
 
 
 def message_id_for(idempotency_key: str) -> str:
@@ -435,11 +639,15 @@ def message_id_for(idempotency_key: str) -> str:
 
 
 def send_message(conn: sqlite3.Connection, source_session_id: str, dest_session_id: str,
-                 body: str, *, authorship: str, kind: str = "note",
-                 authorized: bool = False, idempotency_key: str | None = None,
-                 ttl_seconds: int | None = None, forward_of: str | None = None) -> dict:
-    """Queue a message. Idempotent when idempotency_key is supplied (a repeat returns the
-    existing message unchanged). Enforces all authorization / privacy / loop guards."""
+                 body: str, *, authorship: str = "agent", kind: str = "note",
+                 idempotency_key: str | None = None, ttl_seconds: int | None = None,
+                 forward_of: str | None = None) -> dict:
+    """Queue a message from `source_session_id` (already-AUTHENTICATED at the caller; the MCP
+    layer passes the bound principal, never a tool argument). Idempotent when idempotency_key
+    is supplied. Authorization is by operator GRANT, not a caller boolean:
+      * authorship="user" requires the source to hold CAP_SPEAK_AS_USER,
+      * kind="steer"       requires the source to hold CAP_SEND_STEER scoped to the dest.
+    Enforces all privacy / loop guards."""
     _valid_id(source_session_id, "source_session_id")
     _valid_id(dest_session_id, "dest_session_id")
     src_product = product_of(source_session_id)
@@ -451,8 +659,13 @@ def send_message(conn: sqlite3.Connection, source_session_id: str, dest_session_
     if kind not in VALID_KINDS:
         raise ValidationError(f"kind must be one of {VALID_KINDS}")
     validate_body(body)
-    if kind == "steer" and not authorized:
-        raise AuthorizationError("sending a steering message requires explicit authorization")
+    if authorship == "user" and not has_capability(conn, source_session_id, CAP_SPEAK_AS_USER):
+        raise AuthorizationError(
+            "recording authorship='user' requires an operator speak-as-user grant for the sender")
+    if kind == "steer" and not has_capability(conn, source_session_id, CAP_SEND_STEER,
+                                              scope=dest_session_id):
+        raise AuthorizationError(
+            "sending a steering message requires an operator send-steer grant scoped to the destination")
 
     depth = 0
     root = None
@@ -480,18 +693,18 @@ def send_message(conn: sqlite3.Connection, source_session_id: str, dest_session_
     _ensure_session(conn, dest_session_id)
     _ensure_session(conn, source_session_id)
 
-    detail = f"kind={kind} authorship={authorship} authorized={int(authorized)}"
+    detail = f"kind={kind} authorship={authorship} src={source_session_id}"
     if forward_of:
         detail += f" forward_of={forward_of} depth={depth}"
     # The message row and its 'created' audit event commit together (or not at all).
     with _atomic(conn):
         cur = conn.execute(
             """INSERT OR IGNORE INTO messages(message_id, idempotency_key, source_session_id,
-                    dest_session_id, dest_product, body, authorship, kind, authorized, status,
+                    dest_session_id, dest_product, body, authorship, kind, status,
                     created_at, updated_at, expires_at, forward_depth, root_message_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (mid, key, source_session_id, dest_session_id, dest_product, body, authorship, kind,
-             1 if authorized else 0, STATUS_QUEUED, ts, ts, expires_at, depth, root),
+             STATUS_QUEUED, ts, ts, expires_at, depth, root),
         )
         inserted = cur.rowcount != 0
         if inserted:
@@ -506,6 +719,13 @@ def send_message(conn: sqlite3.Connection, source_session_id: str, dest_session_
 
 # --------------------------------------------------------------------------- #
 # Leases (serialize delivery per destination; reclaim after crash)
+#
+# A lease is a UNIQUE-PK row keyed on the destination. Acquisition is a single-statement
+# INSERT: SQLite serializes writers, so at most one contender's INSERT succeeds — that is the
+# compare-and-set. The loser gets IntegrityError and only "wins" if it already holds the row
+# (re-entrant same holder). No wrapping BEGIN is needed or used; the atomicity is the single
+# INSERT plus the UNIQUE constraint. Expired leases are reclaimed (deleted) first so a
+# crashed holder never blocks forever.
 # --------------------------------------------------------------------------- #
 LEASE_TTL_SECONDS = 120
 
@@ -517,7 +737,8 @@ def reclaim_expired_leases(conn: sqlite3.Connection) -> int:
 
 def acquire_lease(conn: sqlite3.Connection, dest_session_id: str, holder: str,
                   ttl_seconds: int = LEASE_TTL_SECONDS) -> bool:
-    """Single-flight lease for a destination. Returns False if another live holder owns it."""
+    """Single-flight compare-and-set lease for a destination. Returns True if THIS holder now
+    owns the lease, False if a different live holder does. Re-entrant for the same holder."""
     reclaim_expired_leases(conn)
     ts = now()
     try:
@@ -576,20 +797,30 @@ def expire_due(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
-def acknowledge(conn: sqlite3.Connection, message_id: str, by: str | None = None,
-                note: str | None = None) -> dict:
+def acknowledge(conn: sqlite3.Connection, message_id: str, by: str, note: str | None = None) -> dict:
+    """Acknowledge a delivered message. `by` is the AUTHENTICATED recipient principal (the
+    MCP layer supplies it); a principal may only acknowledge a message addressed to it."""
     row = _get_message_row(conn, message_id)
+    _valid_id(by, "by")
+    if row["dest_session_id"] != by:
+        raise AuthorizationError(
+            f"{by} may not acknowledge a message addressed to {row['dest_session_id']}")
     if row["status"] == STATUS_ACKNOWLEDGED:
         return get_message_status(conn, message_id)  # idempotent ack
     detail = f"by={by}" + (f" note={note[:80]}" if note else "")
-    _transition(conn, row, STATUS_ACKNOWLEDGED, extra={"acknowledged_at": now()},
-                event_detail=detail)
+    _transition(conn, row, STATUS_ACKNOWLEDGED,
+                extra={"acknowledged_at": now(), "acknowledged_by": by}, event_detail=detail)
     return get_message_status(conn, message_id)
 
 
-def cancel_message(conn: sqlite3.Connection, message_id: str, by: str | None = None,
+def cancel_message(conn: sqlite3.Connection, message_id: str, by: str,
                    reason: str | None = None) -> dict:
+    """Cancel a queued/delivered message. `by` must be the authenticated sender OR recipient
+    principal of the message (only a party to it may cancel it)."""
     row = _get_message_row(conn, message_id)
+    _valid_id(by, "by")
+    if by not in (row["source_session_id"], row["dest_session_id"]):
+        raise AuthorizationError(f"{by} is not a party to message {message_id}; cannot cancel")
     if row["status"] == STATUS_CANCELLED:
         return get_message_status(conn, message_id)
     if row["status"] in (STATUS_ACKNOWLEDGED, STATUS_EXPIRED, STATUS_FAILED):
@@ -607,63 +838,52 @@ def fail_message(conn: sqlite3.Connection, message_id: str, error: str) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Delivery
+# Delivery (PULL-ONLY: an authenticated recipient draining its own inbox)
 # --------------------------------------------------------------------------- #
 def _steer_refusal_reason(conn: sqlite3.Connection, row: sqlite3.Row) -> str | None:
-    """Return a reason a steering message may NOT be delivered yet, or None if it may.
-    A steer may deliver only if it was authorized AND the destination opted into steering.
-    This is a SOFT gate: like every other delivery gate it leaves the message queued rather
-    than raising, so one undeliverable steer can never poison a batch inbox pull."""
+    """Return a reason a steering message may NOT be delivered yet, or None if it may. A
+    steer delivers only if its SENDER held a send-steer grant at send time (enforced there)
+    AND the DESTINATION currently holds an operator accept-steering grant scoped to the
+    sender. This is a SOFT gate: like every delivery gate it leaves the message queued
+    rather than raising, so one undeliverable steer can never poison a batch inbox pull."""
     if row["kind"] != "steer":
         return None
-    if not row["authorized"]:
-        return "unauthorized steering message; left queued"
-    dest = conn.execute("SELECT accepts_steering FROM sessions WHERE session_id=?",
-                        (row["dest_session_id"],)).fetchone()
-    if not dest or not dest["accepts_steering"]:
-        return "destination has not authorized steering; left queued"
+    if not has_capability(conn, row["dest_session_id"], CAP_ACCEPT_STEERING,
+                          scope=row["source_session_id"]):
+        return "destination has no operator accept-steering grant for this sender; left queued"
     return None
 
 
-def deliver_one(conn: sqlite3.Connection, message_id: str, *, mode: str, boundary: str | None,
-                dest_state: str | None, holder: str) -> dict:
-    """Attempt to mark ONE queued message delivered. Serialized by a destination lease.
-
-    mode="pull": the recipient is fetching its OWN inbox at a safe boundary; delivery is
-        allowed iff `boundary` is a recognized safe pull boundary.
-    mode="push": an adapter is pushing to the recipient; delivery is allowed iff the
-        recipient's conservative state is in PUSH_DELIVERABLE_STATES. active/unknown/
-        unavailable/completed/stale => refuse (leave queued) — "queue when unproven".
-    Refusal never raises for the ordinary not-safe case; it records a delivery_refused
-    event and returns the (still-queued) message with a `delivered: False` flag.
-    """
+def deliver_one(conn: sqlite3.Connection, message_id: str, *, at_boundary: bool, holder: str,
+                boundary_reason: str = "") -> dict:
+    """Mark ONE queued message delivered to its authenticated recipient. Serialized by a
+    destination lease. `at_boundary` is decided by the caller (the MCP layer) from
+    RUNTIME-OWNED evidence — the recipient is authenticated as the destination and is
+    draining its own inbox at its own turn boundary. It is never a caller-supplied string.
+    Refusal never raises for the ordinary not-yet case; it records a delivery_refused event
+    and returns the (still-queued) message with `delivered: False`."""
     row = _get_message_row(conn, message_id)
     if row["status"] != STATUS_QUEUED:
         raise ConflictError(f"message is {row['status']}, not queued")
 
-    allowed, reason = _delivery_allowed(mode, boundary, dest_state)
-    if not allowed:
+    if not at_boundary:
+        reason = boundary_reason or "recipient is not at a safe delivery boundary"
         _log_event(conn, message_id, "delivery_refused", reason)
         out = get_message_status(conn, message_id)
-        out["delivered"] = False
-        out["refused_reason"] = reason
+        out.update({"delivered": False, "refused_reason": reason})
         return out
 
-    # Steering authorization is a SOFT gate (leaves the message queued, never raises), so a
-    # single undeliverable steer can't abort a batch inbox pull of sibling messages.
     steer_reason = _steer_refusal_reason(conn, row)
     if steer_reason is not None:
         _log_event(conn, message_id, "delivery_refused", steer_reason)
         out = get_message_status(conn, message_id)
-        out["delivered"] = False
-        out["refused_reason"] = steer_reason
+        out.update({"delivered": False, "refused_reason": steer_reason})
         return out
 
     if not acquire_lease(conn, row["dest_session_id"], holder):
         _log_event(conn, message_id, "delivery_refused", "destination lease held by another deliverer")
         out = get_message_status(conn, message_id)
-        out["delivered"] = False
-        out["refused_reason"] = "lease_held"
+        out.update({"delivered": False, "refused_reason": "lease_held"})
         return out
     try:
         row = _get_message_row(conn, message_id)  # re-read under lease
@@ -672,8 +892,9 @@ def deliver_one(conn: sqlite3.Connection, message_id: str, *, mode: str, boundar
             out["delivered"] = (row["status"] == STATUS_DELIVERED)
             return out
         _transition(conn, row, STATUS_DELIVERED,
-                    extra={"delivered_at": now(), "attempts": int(row["attempts"]) + 1},
-                    event_detail=f"mode={mode} boundary={boundary} dest_state={dest_state}")
+                    extra={"delivered_at": now(), "delivered_to": row["dest_session_id"],
+                           "attempts": int(row["attempts"]) + 1},
+                    event_detail=f"pulled by {row['dest_session_id']} ({boundary_reason})")
     finally:
         release_lease(conn, row["dest_session_id"], holder)
     out = get_message_status(conn, message_id)
@@ -681,25 +902,15 @@ def deliver_one(conn: sqlite3.Connection, message_id: str, *, mode: str, boundar
     return out
 
 
-def _delivery_allowed(mode: str, boundary: str | None, dest_state: str | None) -> tuple[bool, str]:
-    if mode == "pull":
-        if boundary in SAFE_PULL_BOUNDARIES:
-            return True, "ok"
-        return False, f"boundary {boundary!r} is not a recognized safe pull boundary"
-    if mode == "push":
-        if dest_state in PUSH_DELIVERABLE_STATES:
-            return True, "ok"
-        return False, f"destination state {dest_state!r} is not push-deliverable (queued)"
-    return False, f"unknown delivery mode {mode!r}"
-
-
 def list_inbox(conn: sqlite3.Connection, dest_session_id: str, *, status: str | None = None,
-               deliver: bool = False, boundary: str | None = None, dest_state: str | None = None,
+               deliver: bool = False, at_boundary: bool = False, boundary_reason: str = "",
                holder: str | None = None, max_deliver: int | None = None,
                include_body: bool = True) -> list[dict]:
-    """Return messages addressed to dest_session_id. With deliver=True this is the safe
-    PULL path: queued messages are transitioned to delivered at the given safe boundary,
-    serialized per destination. Expired messages are swept first so they never deliver."""
+    """Return messages addressed to dest_session_id. With deliver=True AND at_boundary=True
+    this is the safe PULL path: queued messages are transitioned to delivered, serialized per
+    destination. The caller (MCP layer) is the authenticated recipient and passes at_boundary
+    derived from runtime evidence — not from a tool argument. Expired messages are swept
+    first so they never deliver."""
     _valid_id(dest_session_id, "dest_session_id")
     expire_due(conn)
     if deliver:
@@ -711,8 +922,8 @@ def list_inbox(conn: sqlite3.Connection, dest_session_id: str, *, status: str | 
         for r in queued:
             if max_deliver is not None and count >= max_deliver:
                 break
-            res = deliver_one(conn, r["message_id"], mode="pull", boundary=boundary,
-                              dest_state=dest_state, holder=holder)
+            res = deliver_one(conn, r["message_id"], at_boundary=at_boundary,
+                              boundary_reason=boundary_reason, holder=holder)
             if res.get("delivered"):
                 count += 1
     q = "SELECT * FROM messages WHERE dest_session_id=?"
@@ -756,13 +967,18 @@ def health(conn: sqlite3.Connection) -> dict:
         counts[row["status"]] = row["c"]
     sess = conn.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"]
     leases = conn.execute("SELECT COUNT(*) c FROM leases").fetchone()["c"]
+    principals = conn.execute("SELECT COUNT(*) c FROM principals WHERE revoked=0").fetchone()["c"]
+    grants = conn.execute("SELECT COUNT(*) c FROM auth_grants WHERE revoked=0").fetchone()["c"]
     ver = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
     return {
         "ok": True,
         "db_path": str(db_path()),
         "schema_version": int(ver["version"]) if ver else None,
         "sessions": sess,
+        "principals": principals,
+        "active_grants": grants,
         "messages_by_status": counts,
         "active_leases": leases,
         "expired_swept": expired,
+        "delivery_model": "pull-only",
     }

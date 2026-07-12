@@ -24,11 +24,13 @@ the recipient to reach one. Check why:
 python "{{SKILL_HOME}}/scripts/portal_admin.py" events --message <message-id>
 ```
 
-A `delivery_refused` event explains the reason (recipient `active`, state `unknown`, a held
-lease, or an unauthorized steering attempt). Recipients drain their inbox with:
+A `delivery_refused` event explains the reason (a held lease, or a steering message with no
+`accept-steering` grant on the destination). Delivery is pull-only: the recipient drains its
+own inbox through the MCP tool `portal_list_inbox {deliver: true}` (acting as its bound
+token). For an operator-driven drain, vouch for the boundary explicitly:
 
 ```bash
-python "{{SKILL_HOME}}/scripts/portal_admin.py" inbox --session <product:id> --deliver --boundary stop
+python "{{SKILL_HOME}}/scripts/portal_admin.py" inbox --session <product:id> --deliver --at-boundary
 ```
 
 ## Stale lock after a crash
@@ -60,17 +62,37 @@ python "{{SKILL_HOME}}/scripts/portal_admin.py" cancel --message <message-id> --
 You can cancel a `queued` or `delivered` message; you cannot cancel one that was already
 acknowledged, expired, or failed.
 
+## An identity-bearing tool returns `authorization_error`
+
+The MCP server needs a valid token to act. Mint one and put it in the server's env
+(`SESSION_PORTAL_TOKEN`); see `mcp-config.md`. A token that expired or was revoked also fails
+— re-issue it:
+
+```bash
+python "{{SKILL_HOME}}/scripts/portal_admin.py" issue-principal --product claude --session <id>
+python "{{SKILL_HOME}}/scripts/portal_admin.py" list-principals
+```
+
+## A steering message won't deliver
+
+Steering needs two operator grants: `send-steer` on the sender and `accept-steering` on the
+destination (scoped to the counterparty). Check and grant:
+
+```bash
+python "{{SKILL_HOME}}/scripts/portal_admin.py" list-grants
+python "{{SKILL_HOME}}/scripts/portal_admin.py" grant --to <dest> --capability accept-steering --scope <sender> --ttl 3600
+```
+
 ## Codex delivery says "queued", never "delivered"
 
-That is expected unless a real Codex task tool is surfaced to the running task. Check:
+That is expected: delivery is pull-only. A message to a Codex session becomes delivered when
+that Codex session pulls its own inbox (as its bound token). There is no native-task push in
+this MVP; `codex-status` always reports native messaging as not an implemented delivery
+channel:
 
 ```bash
 python "{{SKILL_HOME}}/scripts/portal_admin.py" codex-status
 ```
-
-By default native task messaging is reported unavailable and delivery falls back to the
-durable queue, which Codex drains at a supported boundary. Only set
-`SESSION_PORTAL_CODEX_NATIVE=1` in a context that genuinely surfaces the task tool.
 
 ## Uninstall / rollback
 

@@ -60,6 +60,28 @@ def _now() -> float:
     return time.time()
 
 
+def host_process_alive(product: str, session: str) -> bool | None:
+    """Liveness from RUNTIME-OWNED host evidence, never from a caller argument.
+
+    A runtime (or an operator hook) may drop a small JSON file at
+    $SESSION_PORTAL_HOST_EVIDENCE mapping "<product>:<runtime_session>" -> bool, written by
+    something that actually knows whether the process is alive (e.g. a session-start /
+    session-end hook, or a supervisor). We read it read-only. When there is no positive
+    evidence we return None (unknown) — the classifier then stays conservative and never
+    upgrades to `completed`. We deliberately do NOT trust a caller to assert liveness."""
+    path = os.environ.get("SESSION_PORTAL_HOST_EVIDENCE")
+    if not path:
+        return None
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    val = data.get(f"{product}:{session}")
+    return val if isinstance(val, bool) else None
+
+
 def claude_root() -> Path:
     env = os.environ.get("SESSION_PORTAL_CLAUDE_LOGS")
     return Path(env).resolve() if env else (Path.home() / ".claude" / "projects").resolve()
@@ -186,12 +208,16 @@ def _analyze_codex(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def classify(product: str, session: str, *, process_alive: bool | None = None,
              now: float | None = None) -> dict[str, Any]:
-    """Classify a session's deliverability state from read-only evidence.
+    """Classify a session's deliverability state from read-only, RUNTIME-OWNED evidence.
 
-    process_alive: optional out-of-band hint. True/False sharpen idle vs completed;
-    None (unknown) stays conservative (never upgrades to `completed`).
+    process_alive: liveness evidence. In production it is derived from host evidence
+    (`host_process_alive`, a runtime-written file) — NOT from a caller argument; the param
+    exists so tests can inject deterministic evidence. When None we consult host evidence,
+    and if that is also unknown we stay conservative and never upgrade to `completed`.
     """
     ts = now if now is not None else _now()
+    if process_alive is None:
+        process_alive = host_process_alive(product, session)
     log = resolve_log(product, session)
     if log is None:
         return {"state": UNAVAILABLE, "reason": "no session log found", "log": None,

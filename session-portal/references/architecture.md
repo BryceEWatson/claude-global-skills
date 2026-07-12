@@ -14,11 +14,23 @@ recipient is safely paused, the note simply waits.
 
 | Piece | Role |
 |---|---|
-| `portal_core.py` | Storage, the message lifecycle state machine, and every validation / authorization / privacy check. Pure and importable. |
-| `portal_state.py` | Read-only classifier that decides if a session is safe to deliver to. Never writes a transcript. |
-| `portal_adapters.py` | Boundary-safe delivery: push (only to a paused session), the guarded Claude resume, the Codex-native fallback. |
-| `portal_mcp.py` | Local stdio MCP (JSON-RPC 2.0) server exposing the tools. Binds nothing to the network. |
-| `portal_admin.py` | Operator CLI: health, register, send/inbox/ack, stale-lock recovery, uninstall. |
+| `portal_core.py` | Storage, the message lifecycle state machine, the authenticated-principal + operator-grant model, and every validation / authorization / privacy check. Pure and importable. |
+| `portal_state.py` | Read-only classifier that reports a session's state from its own runtime-owned log (plus host liveness evidence). Never writes a transcript, never takes a caller-asserted state. |
+| `portal_adapters.py` | **Advisory only.** Classifies whether a recipient looks safe to notify, and describes (never performs) an operator resume. No delivery side effects — delivery is pull-only in `portal_core`. |
+| `portal_mcp.py` | Local stdio MCP (JSON-RPC 2.0) server. Binds nothing to the network. Resolves a bearer token to a principal and derives all identity from it. |
+| `portal_admin.py` | Operator CLI: mint principal tokens, issue capability grants, health, register, operator-privileged send/inbox/ack, stale-lock recovery, uninstall. |
+
+## Identity and authorization
+
+- **Principals (authentication).** The operator mints a bearer token for a session
+  (`issue-principal`); only its salted hash is stored. Each MCP server is launched by one
+  session with that token in `SESSION_PORTAL_TOKEN`. The server resolves it to a principal
+  (`product:runtime_session_id`) and derives the message source, the inbox owner, and the
+  acknowledger from it — never from a tool argument. Tokens expire and are revocable.
+- **Grants (authorization).** Elevated actions are operator-issued capability grants
+  (`send-steer`, `accept-steering`, `speak-as-user`), each scoped to a counterparty (or `*`),
+  expiring, and revocable. They replace the old caller-supplied `authorized` /
+  `accepts_steering` booleans, so a caller can no longer flip a security gate.
 
 ## Storage
 
@@ -30,8 +42,10 @@ its audit event; a status change plus its lifecycle event) runs inside an explic
 `BEGIN IMMEDIATE` transaction, so a crash can't leave a row and its audit event split. There
 is **no daemon** — every operation opens the DB, does its work, and closes.
 
-Tables: `sessions`, `messages`, `message_events` (the audit trail), `leases` (per-
-destination single-flight), and `schema_version` (migrations).
+Tables: `sessions`, `principals` (authenticated identities, hashed tokens), `auth_grants`
+(operator capabilities), `messages`, `message_events` (the audit trail), `leases` (per-
+destination single-flight), and `schema_version` (migrations; current schema is **v2**, which
+adds `principals`/`auth_grants` and migrates a v1 DB in place).
 
 ## Message lifecycle
 
@@ -51,42 +65,46 @@ never delivered) are rejected.
 ## Discovery
 
 `portal_list_sessions` / `portal_get_session` return registered sessions and their last
-reported state. A session registers itself (`portal_register_session`) with a stable id
-of the form `product:runtime_session_id` (e.g. `claude:1a2b`, `codex:9f8e`). A message may
-be queued for a session that has not registered yet; a placeholder row holds it until the
-recipient checks in.
+reported state. A session announces itself (`portal_register_session`) under its
+authenticated id of the form `product:runtime_session_id` (e.g. `claude:1a2b`, `codex:9f8e`).
+A message may be queued for a session that has not registered yet; a placeholder row holds it
+until the recipient checks in.
 
-## Delivery paths
+## Delivery: pull-only
 
-Only the **Pull** path is exposed as an MCP tool and an admin command; it is the path an
-operator or an agent actually invokes. Push, Claude-resume, and Codex-native are
-library-level adapters (`portal_adapters.py`), callable programmatically and exercised by
-the test suite, provided for a future runtime that wants sender-side delivery. They are
-listed here so the safety rules that bound them are documented, not to imply an operator
-command exists for each.
+Delivery happens on exactly one event: the **authenticated recipient pulls its own inbox**.
+The recipient calls `portal_list_inbox` with `deliver=true`; because it is the bound
+principal draining its own inbox, the pull *is* the safe turn boundary and *is* the proof of
+receipt, so queued messages transition to delivered and are stamped `delivered_to` = the
+recipient. There is no caller-supplied boundary string; the server annotates the pull with
+runtime-derived state read from the recipient's own log.
 
-- **Pull** (primary, safe by construction): the recipient calls `portal_list_inbox` with
-  `deliver=true` at one of its own safe boundaries — session-start, prompt-submit, stop,
-  an explicit command, or an authorized heartbeat. Being at that boundary *is* the proof
-  of safety, so queued messages transition to delivered.
-- **Push** (sender-side, guarded): an adapter may deliver to a recipient only if the
-  read-only classifier reports it `idle` or `waiting-for-user`. An `active` session — or
-  any state where idleness isn't proven — is refused and the message stays queued.
-- **Claude resume** (last resort, closed sessions only): used only after proof the target
-  session is closed and a destination lease is held; it never resumes an active session
-  and defaults to a dry-run that returns the command plan rather than launching it.
-- **Codex native**: used only when a real Codex task tool is surfaced to a running,
-  authorized task; otherwise delivery falls back to the durable queue.
+There is deliberately **no** sender-side push, auto-resume, or Codex-native delivery in this
+MVP: each would have to claim the recipient received a message without the recipient ever
+confirming it — exactly the false-receipt failure this design avoids. `portal_adapters.py`
+therefore only *advises*:
+
+- `classify_deliverability` — read-only: is the recipient provably between turns? Advice for
+  deciding whether to notify a human; it never delivers.
+- `resume_plan` — describes an operator `claude --resume` command for a *proven-closed*
+  session; it never spawns anything and never marks a message delivered or resumed.
+- `codex_native_status` — always reports native task messaging as not an implemented delivery
+  channel; delivery to Codex is the durable queue drained by an authenticated Codex-side pull.
 
 ## Idempotency, leases, recovery
 
 - A send carrying an `idempotency_key` is safe to retry: a repeat returns the existing
   message unchanged (no duplicate, no second `created` event). The `message_id` is derived
   deterministically from the key.
-- Delivery to one destination is serialized by a lease row; a second deliverer is refused
-  until the lease is released or its TTL lapses. After a crash, an orphaned lease is
-  reclaimed once its TTL passes, and any message left `queued` is simply delivered on the
-  next safe boundary. A `delivered` message persists durably until it is acknowledged.
+- Delivery to one destination is serialized by a **lease** row keyed on the destination.
+  Acquisition is a single-statement `INSERT` guarded by the primary-key UNIQUE constraint:
+  SQLite serializes writers, so at most one contender's INSERT succeeds — that single
+  statement *is* the compare-and-set (no wrapping transaction is needed or used). A loser
+  gets `IntegrityError` and only "wins" if it already holds the row (re-entrant same holder).
+  Expired leases are reclaimed (deleted) before each attempt, so a crashed holder never blocks
+  forever; `release_lease` is holder-scoped, so a late release from a crashed holder cannot
+  delete the lease a new holder has since taken. A `delivered` message persists durably until
+  it is acknowledged.
 
 ## Implementation detail
 

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Hermetic tests for portal_core — storage, lifecycle, validation, idempotency, leases,
-crash recovery, concurrency. Every test uses a throwaway DB under a temp dir via
-SESSION_PORTAL_DB, so the developer's real portal is never touched.
+"""Hermetic tests for portal_core — storage, migrations, principals, grants, lifecycle,
+validation, idempotency, leases (CAS), crash recovery, concurrency. Every test uses a
+throwaway DB under a temp dir via SESSION_PORTAL_DB, so the developer's real portal is
+never touched.
 
 Run: python -m unittest discover -s session-portal/tests -p 'test_*.py'
 """
 import importlib.util
 import os
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -64,10 +66,11 @@ class CoreBase(unittest.TestCase):
         core.register_session(self.conn, "codex", "A", label="codex-A")
 
     def _send(self, **kw):
+        # Default sender identity codex:A, recipient claude:B, agent authorship (needs no grant).
         kw.setdefault("source_session_id", "codex:A")
         kw.setdefault("dest_session_id", "claude:B")
         kw.setdefault("body", "hello")
-        kw.setdefault("authorship", "user")
+        kw.setdefault("authorship", "agent")
         return core.send_message(self.conn, kw.pop("source_session_id"),
                                  kw.pop("dest_session_id"), kw.pop("body"), **kw)
 
@@ -102,6 +105,113 @@ class TestStorageAndMigrations(CoreBase):
         self.assertEqual(got["body"], "hello")
         conn2.close()
 
+    def test_v1_to_v2_migration(self):
+        # Build a minimal v1 database (no principals/auth_grants, messages lacks the new
+        # delivered_to/acknowledged_by columns), then let init_db migrate it to v2.
+        p = self.tmp / "legacy.db"
+        raw = sqlite3.connect(str(p))
+        raw.executescript(
+            """
+            CREATE TABLE schema_version (version INTEGER NOT NULL);
+            INSERT INTO schema_version(version) VALUES (1);
+            CREATE TABLE messages (
+                message_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,
+                source_session_id TEXT NOT NULL, dest_session_id TEXT NOT NULL,
+                dest_product TEXT NOT NULL, body TEXT NOT NULL, authorship TEXT NOT NULL,
+                kind TEXT NOT NULL, authorized INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'queued', created_at REAL NOT NULL,
+                updated_at REAL NOT NULL, expires_at REAL, delivered_at REAL,
+                acknowledged_at REAL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+                forward_depth INTEGER NOT NULL DEFAULT 0, root_message_id TEXT);
+            INSERT INTO messages(message_id, idempotency_key, source_session_id, dest_session_id,
+                dest_product, body, authorship, kind, status, created_at, updated_at)
+              VALUES ('msg_legacy','ik','codex:A','claude:B','claude','old body','agent','note',
+                      'queued', 1.0, 1.0);
+            """)
+        raw.commit()
+        raw.close()
+
+        conn = core.connect(p)
+        core.init_db(conn)  # should migrate 1 -> 2
+        self.assertEqual(conn.execute("SELECT version FROM schema_version").fetchone()["version"], 2)
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
+        self.assertIn("delivered_to", cols)
+        self.assertIn("acknowledged_by", cols)
+        # New tables exist and the legacy row survived.
+        conn.execute("SELECT 1 FROM principals LIMIT 1")
+        conn.execute("SELECT 1 FROM auth_grants LIMIT 1")
+        self.assertEqual(core.get_message_status(conn, "msg_legacy")["body"], "old body")
+        conn.close()
+
+
+class TestPrincipals(CoreBase):
+    def test_issue_resolve_roundtrip(self):
+        pr = core.issue_principal(self.conn, "claude", "B", label="demo")
+        self.assertEqual(pr["session_id"], "claude:B")
+        self.assertIn("token", pr)
+        self.assertNotIn("token_hash", pr)  # never leak the hash
+        self.assertEqual(core.resolve_principal(self.conn, pr["token"]), "claude:B")
+
+    def test_only_hash_is_stored(self):
+        pr = core.issue_principal(self.conn, "claude", "B")
+        stored = self.conn.execute("SELECT token_hash FROM principals WHERE session_id=?",
+                                   ("claude:B",)).fetchone()["token_hash"]
+        self.assertNotEqual(stored, pr["token"])
+        self.assertEqual(len(stored), 64)  # sha256 hex
+
+    def test_unknown_token_rejected(self):
+        with self.assertRaises(core.AuthorizationError):
+            core.resolve_principal(self.conn, "not-a-real-token-0000000000")
+
+    def test_expired_token_rejected(self):
+        pr = core.issue_principal(self.conn, "claude", "B", ttl_seconds=10)
+        self.clock.advance(11)
+        with self.assertRaises(core.AuthorizationError):
+            core.resolve_principal(self.conn, pr["token"])
+
+    def test_revoked_token_rejected(self):
+        pr = core.issue_principal(self.conn, "claude", "B")
+        core.revoke_principal(self.conn, "claude:B")
+        with self.assertRaises(core.AuthorizationError):
+            core.resolve_principal(self.conn, pr["token"])
+
+    def test_rotation_invalidates_old_token(self):
+        old = core.issue_principal(self.conn, "claude", "B")
+        new = core.issue_principal(self.conn, "claude", "B")  # rotate
+        self.assertNotEqual(old["token"], new["token"])
+        self.assertEqual(core.resolve_principal(self.conn, new["token"]), "claude:B")
+        with self.assertRaises(core.AuthorizationError):
+            core.resolve_principal(self.conn, old["token"])
+
+
+class TestGrants(CoreBase):
+    def test_grant_and_check(self):
+        self.assertFalse(core.has_capability(self.conn, "codex:A", core.CAP_SEND_STEER))
+        core.grant_capability(self.conn, "codex:A", core.CAP_SEND_STEER, scope="claude:B")
+        self.assertTrue(core.has_capability(self.conn, "codex:A", core.CAP_SEND_STEER, scope="claude:B"))
+        # Scope is enforced: a grant for claude:B does not authorize sending to codex:C.
+        self.assertFalse(core.has_capability(self.conn, "codex:A", core.CAP_SEND_STEER, scope="codex:C"))
+
+    def test_wildcard_scope(self):
+        core.grant_capability(self.conn, "codex:A", core.CAP_SPEAK_AS_USER, scope="*")
+        self.assertTrue(core.has_capability(self.conn, "codex:A", core.CAP_SPEAK_AS_USER, scope="anything:x"))
+
+    def test_grant_expiry(self):
+        core.grant_capability(self.conn, "codex:A", core.CAP_SEND_STEER, scope="claude:B", ttl_seconds=10)
+        self.assertTrue(core.has_capability(self.conn, "codex:A", core.CAP_SEND_STEER, scope="claude:B"))
+        self.clock.advance(11)
+        self.assertFalse(core.has_capability(self.conn, "codex:A", core.CAP_SEND_STEER, scope="claude:B"))
+
+    def test_grant_revoke(self):
+        g = core.grant_capability(self.conn, "codex:A", core.CAP_ACCEPT_STEERING)
+        self.assertTrue(core.has_capability(self.conn, "codex:A", core.CAP_ACCEPT_STEERING))
+        core.revoke_grant(self.conn, g["id"])
+        self.assertFalse(core.has_capability(self.conn, "codex:A", core.CAP_ACCEPT_STEERING))
+
+    def test_unknown_capability_rejected(self):
+        with self.assertRaises(core.ValidationError):
+            core.grant_capability(self.conn, "codex:A", "make-coffee")
+
 
 class TestSessions(CoreBase):
     def test_register_and_get(self):
@@ -126,7 +236,6 @@ class TestSessions(CoreBase):
             core.get_session(self.conn, "claude:nope")
 
     def test_send_autocreates_placeholder_dest(self):
-        # A message may be queued before the recipient first registers.
         m = self._send(dest_session_id="claude:LATER", idempotency_key="k")
         dest = core.get_session(self.conn, "claude:LATER")
         self.assertEqual(dest["registered"], 0)
@@ -181,11 +290,9 @@ class TestIdempotency(CoreBase):
         m2 = self._send(idempotency_key="dup", body="different text")
         self.assertEqual(m1["message_id"], m2["message_id"])
         self.assertTrue(m2.get("idempotent_duplicate"))
-        # Only one row + one 'created' event.
         self.assertEqual(self.conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"], 1)
         created = [e for e in core.message_events(self.conn, m1["message_id"]) if e["event"] == "created"]
         self.assertEqual(len(created), 1)
-        # The original body wins (no silent overwrite).
         self.assertEqual(core.get_message_status(self.conn, m1["message_id"])["body"], "hello")
 
     def test_no_key_distinct_messages(self):
@@ -194,9 +301,6 @@ class TestIdempotency(CoreBase):
         self.assertNotEqual(a["message_id"], b["message_id"])
 
     def test_key_scoped_to_destination(self):
-        # Regression: the SAME natural key to two DIFFERENT recipients must create two
-        # distinct messages, not collide and silently drop the second (returning the first's
-        # body). Idempotency identity is scoped to (source, dest, key).
         m_b = self._send(dest_session_id="claude:B", body="to B", idempotency_key="task-42")
         m_c = self._send(dest_session_id="codex:C", body="to C", idempotency_key="task-42")
         self.assertNotEqual(m_b["message_id"], m_c["message_id"])
@@ -213,30 +317,45 @@ class TestLifecycle(CoreBase):
     def test_queued_delivered_acknowledged(self):
         m = self._send(idempotency_key="k")
         self.assertEqual(m["status"], "queued")
-        core.list_inbox(self.conn, "claude:B", deliver=True, boundary="stop")
-        self.assertEqual(core.get_message_status(self.conn, m["message_id"])["status"], "delivered")
+        core.list_inbox(self.conn, "claude:B", deliver=True, at_boundary=True)
+        got = core.get_message_status(self.conn, m["message_id"])
+        self.assertEqual(got["status"], "delivered")
+        self.assertEqual(got["delivered_to"], "claude:B")
         core.acknowledge(self.conn, m["message_id"], by="claude:B")
-        self.assertEqual(core.get_message_status(self.conn, m["message_id"])["status"], "acknowledged")
+        got = core.get_message_status(self.conn, m["message_id"])
+        self.assertEqual(got["status"], "acknowledged")
+        self.assertEqual(got["acknowledged_by"], "claude:B")
         events = [e["event"] for e in core.message_events(self.conn, m["message_id"])]
         self.assertEqual(events, ["created", "delivered", "acknowledged"])
 
-    def test_cancel_queued(self):
+    def test_ack_by_wrong_session_rejected(self):
+        m = self._send(idempotency_key="k")
+        core.list_inbox(self.conn, "claude:B", deliver=True, at_boundary=True)
+        with self.assertRaises(core.AuthorizationError):
+            core.acknowledge(self.conn, m["message_id"], by="codex:A")  # not the recipient
+
+    def test_cancel_by_party(self):
         m = self._send(idempotency_key="k")
         core.cancel_message(self.conn, m["message_id"], by="codex:A", reason="never mind")
         self.assertEqual(core.get_message_status(self.conn, m["message_id"])["status"], "cancelled")
 
+    def test_cancel_by_non_party_rejected(self):
+        m = self._send(idempotency_key="k")
+        with self.assertRaises(core.AuthorizationError):
+            core.cancel_message(self.conn, m["message_id"], by="codex:STRANGER")
+
     def test_cannot_cancel_acknowledged(self):
         m = self._send(idempotency_key="k")
-        core.list_inbox(self.conn, "claude:B", deliver=True, boundary="stop")
-        core.acknowledge(self.conn, m["message_id"])
+        core.list_inbox(self.conn, "claude:B", deliver=True, at_boundary=True)
+        core.acknowledge(self.conn, m["message_id"], by="claude:B")
         with self.assertRaises(core.ConflictError):
-            core.cancel_message(self.conn, m["message_id"])
+            core.cancel_message(self.conn, m["message_id"], by="claude:B")
 
     def test_ack_is_idempotent(self):
         m = self._send(idempotency_key="k")
-        core.list_inbox(self.conn, "claude:B", deliver=True, boundary="stop")
-        core.acknowledge(self.conn, m["message_id"])
-        core.acknowledge(self.conn, m["message_id"])  # no error, still acknowledged
+        core.list_inbox(self.conn, "claude:B", deliver=True, at_boundary=True)
+        core.acknowledge(self.conn, m["message_id"], by="claude:B")
+        core.acknowledge(self.conn, m["message_id"], by="claude:B")  # no error
         self.assertEqual(core.get_message_status(self.conn, m["message_id"])["status"], "acknowledged")
 
     def test_expiration(self):
@@ -248,13 +367,13 @@ class TestLifecycle(CoreBase):
     def test_expired_never_delivers(self):
         m = self._send(idempotency_key="k", ttl_seconds=10)
         self.clock.advance(20)
-        core.list_inbox(self.conn, "claude:B", deliver=True, boundary="stop")
+        core.list_inbox(self.conn, "claude:B", deliver=True, at_boundary=True)
         self.assertEqual(core.get_message_status(self.conn, m["message_id"])["status"], "expired")
 
     def test_illegal_transition_rejected(self):
         m = self._send(idempotency_key="k")
         with self.assertRaises(core.ConflictError):
-            core.acknowledge(self.conn, m["message_id"])  # cannot ack a queued (undelivered) msg
+            core.acknowledge(self.conn, m["message_id"], by="claude:B")  # cannot ack a queued msg
 
     def test_fail_message_reaches_failed_state(self):
         m = self._send(idempotency_key="k")
@@ -265,52 +384,84 @@ class TestLifecycle(CoreBase):
         self.assertIn("failed", [e["event"] for e in core.message_events(self.conn, m["message_id"])])
 
 
-class TestAuthorizationAndLoops(CoreBase):
+class TestPullDeliveryGating(CoreBase):
+    def setUp(self):
+        super().setUp()
+        self._register_pair()
+
+    def test_pull_without_boundary_refused(self):
+        m = self._send(idempotency_key="k")
+        res = core.deliver_one(self.conn, m["message_id"], at_boundary=False, holder="h")
+        self.assertFalse(res["delivered"])
+        self.assertEqual(core.get_message_status(self.conn, m["message_id"])["status"], "queued")
+
+    def test_pull_at_boundary_delivers(self):
+        m = self._send(idempotency_key="k")
+        res = core.deliver_one(self.conn, m["message_id"], at_boundary=True, holder="h")
+        self.assertTrue(res["delivered"])
+        self.assertEqual(core.get_message_status(self.conn, m["message_id"])["status"], "delivered")
+
+
+class TestSteeringGrants(CoreBase):
     def setUp(self):
         super().setUp()
         self._register_pair()
 
     def test_unauthorized_steer_rejected_at_send(self):
+        # No send-steer grant on the source -> refused at send.
         with self.assertRaises(core.AuthorizationError):
             self._send(kind="steer", authorship="agent")
 
-    def test_authorized_steer_needs_optin_dest_to_deliver(self):
-        m = self._send(kind="steer", authorship="user", authorized=True, idempotency_key="s1")
-        # Destination has NOT opted into steering -> SOFT refusal (queued), never raises.
-        res = core.deliver_one(self.conn, m["message_id"], mode="pull", boundary="stop",
-                               dest_state=None, holder="h")
+    def test_steer_needs_send_grant_then_accept_grant(self):
+        core.grant_capability(self.conn, "codex:A", core.CAP_SEND_STEER, scope="claude:B")
+        m = self._send(kind="steer", authorship="agent", idempotency_key="s1")
+        # Destination has NO accept-steering grant -> SOFT refusal (queued), never raises.
+        res = core.deliver_one(self.conn, m["message_id"], at_boundary=True, holder="h")
         self.assertFalse(res["delivered"])
         self.assertIn("steering", res["refused_reason"])
         self.assertEqual(core.get_message_status(self.conn, m["message_id"])["status"], "queued")
-        # Opt the destination in, then delivery succeeds.
-        core.register_session(self.conn, "claude", "B", accepts_steering=True)
-        res2 = core.deliver_one(self.conn, m["message_id"], mode="pull", boundary="stop",
-                                dest_state=None, holder="h")
+        # Grant the destination accept-steering scoped to the sender, then delivery succeeds.
+        core.grant_capability(self.conn, "claude:B", core.CAP_ACCEPT_STEERING, scope="codex:A")
+        res2 = core.deliver_one(self.conn, m["message_id"], at_boundary=True, holder="h")
         self.assertTrue(res2["delivered"])
 
     def test_steer_to_non_optin_does_not_poison_inbox(self):
-        # Regression: an undeliverable authorized steer queued BEFORE a note must not abort
-        # the batch inbox pull — the note still delivers and no exception escapes.
-        steer = self._send(kind="steer", authorship="user", authorized=True, idempotency_key="s1")
+        core.grant_capability(self.conn, "codex:A", core.CAP_SEND_STEER, scope="claude:B")
+        steer = self._send(kind="steer", authorship="agent", idempotency_key="s1")
         self.clock.advance(1)  # ensure the note sorts AFTER the steer by created_at
         note = self._send(body="just a note", idempotency_key="n1")
-        inbox = core.list_inbox(self.conn, "claude:B", deliver=True, boundary="stop")
+        inbox = core.list_inbox(self.conn, "claude:B", deliver=True, at_boundary=True)
         statuses = {x["message_id"]: x["status"] for x in inbox}
         self.assertEqual(statuses[steer["message_id"]], "queued")     # steer left queued
         self.assertEqual(statuses[note["message_id"]], "delivered")   # note still delivered
+
+    def test_user_authorship_requires_grant(self):
+        with self.assertRaises(core.AuthorizationError):
+            self._send(authorship="user", idempotency_key="u1")
+        core.grant_capability(self.conn, "codex:A", core.CAP_SPEAK_AS_USER)
+        m = self._send(authorship="user", idempotency_key="u2")
+        self.assertEqual(core.get_message_status(self.conn, m["message_id"])["authorship"], "user")
+
+
+class TestLoops(CoreBase):
+    def setUp(self):
+        super().setUp()
+        self._register_pair()
 
     def test_self_message_rejected(self):
         with self.assertRaises(core.ValidationError):
             self._send(source_session_id="claude:B", dest_session_id="claude:B")
 
     def test_forward_depth_cap(self):
-        m = self._send(idempotency_key="root")
-        f1 = core.send_message(self.conn, "claude:B", "codex:A", "fwd", authorship="user",
-                               idempotency_key="f1", forward_of=m["message_id"])
+        # Forward through third parties so this isolates the DEPTH cap (a reversed pair would
+        # trip the separate ping-pong guard instead).
+        m = self._send(idempotency_key="root")                          # codex:A -> claude:B
+        f1 = core.send_message(self.conn, "claude:B", "codex:C", "fwd", authorship="agent",
+                               idempotency_key="f1", forward_of=m["message_id"])  # depth 1
         self.assertEqual(f1["forward_depth"], 1)
         with self.assertRaises(core.ValidationError):
-            core.send_message(self.conn, "codex:A", "claude:B", "fwd2", authorship="user",
-                              idempotency_key="f2", forward_of=f1["message_id"])
+            core.send_message(self.conn, "codex:C", "claude:D", "fwd2", authorship="agent",
+                              idempotency_key="f2", forward_of=f1["message_id"])  # depth 2 > cap
 
     def test_pingpong_reversed_agent_forward_rejected(self):
         m = self._send(authorship="agent", idempotency_key="root")
@@ -331,31 +482,62 @@ class TestLeasesAndCrashRecovery(CoreBase):
         core.release_lease(self.conn, "claude:B", "holder1")
         self.assertTrue(core.acquire_lease(self.conn, "claude:B", "holder2"))
 
+    def test_lease_cas_two_holders_exactly_one_wins(self):
+        # Compare-and-set under real thread contention: many holders race for one dest; the
+        # UNIQUE-PK single-statement INSERT must let EXACTLY ONE win, and the DB must end with
+        # exactly one lease row owned by that winner.
+        core.set_clock(__import__("time").time)  # real clock for threads
+        winners, lock = [], threading.Lock()
+        barrier = threading.Barrier(8)
+
+        def contend(n):
+            conn = core.connect()
+            core.init_db(conn)
+            barrier.wait()
+            if core.acquire_lease(conn, "codex:A", f"h{n}", ttl_seconds=300):
+                with lock:
+                    winners.append(f"h{n}")
+            conn.close()
+
+        threads = [threading.Thread(target=contend, args=(n,)) for n in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(len(winners), 1, f"expected one CAS winner, got {winners}")
+        rows = self.conn.execute("SELECT holder FROM leases WHERE dest_session_id=?", ("codex:A",)).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["holder"], winners[0])
+
     def test_expired_lease_reclaimed(self):
         core.acquire_lease(self.conn, "claude:B", "dead", ttl_seconds=10)
         self.clock.advance(11)
         self.assertEqual(core.reclaim_expired_leases(self.conn), 1)
         self.assertTrue(core.acquire_lease(self.conn, "claude:B", "fresh"))
 
+    def test_stale_holder_release_does_not_steal_new_lease(self):
+        # A crashed holder A's lease expires; B takes it. A's late release_lease(A) must NOT
+        # delete B's lease (release is holder-scoped).
+        core.acquire_lease(self.conn, "claude:B", "A", ttl_seconds=10)
+        self.clock.advance(11)
+        self.assertTrue(core.acquire_lease(self.conn, "claude:B", "B"))  # reclaims A, takes it
+        core.release_lease(self.conn, "claude:B", "A")  # A's stale release
+        row = self.conn.execute("SELECT holder FROM leases WHERE dest_session_id=?", ("claude:B",)).fetchone()
+        self.assertEqual(row["holder"], "B")  # B still holds it
+
     def test_crash_leaves_deliverable_after_lease_expiry(self):
-        # Simulate a deliverer that acquired the lease then "crashed" (never released).
         m = self._send(idempotency_key="k")
         core.acquire_lease(self.conn, "claude:B", "crashed", ttl_seconds=30)
-        # A new deliverer cannot get the lease yet, so delivery is refused (queued).
-        res = core.deliver_one(self.conn, m["message_id"], mode="pull", boundary="stop",
-                               dest_state=None, holder="new")
+        res = core.deliver_one(self.conn, m["message_id"], at_boundary=True, holder="new")
         self.assertFalse(res["delivered"])
         self.assertEqual(res["refused_reason"], "lease_held")
-        # After the lease TTL lapses, delivery recovers.
         self.clock.advance(31)
-        res2 = core.deliver_one(self.conn, m["message_id"], mode="pull", boundary="stop",
-                                dest_state=None, holder="new")
+        res2 = core.deliver_one(self.conn, m["message_id"], at_boundary=True, holder="new")
         self.assertTrue(res2["delivered"])
 
     def test_delivered_persists_until_ack(self):
         m = self._send(idempotency_key="k")
-        core.list_inbox(self.conn, "claude:B", deliver=True, boundary="stop")
-        # Reopen the DB (as if the process restarted) — the delivered message is durable.
+        core.list_inbox(self.conn, "claude:B", deliver=True, at_boundary=True)
         self.conn.close()
         self.conn = core.connect()
         core.init_db(self.conn)
@@ -365,7 +547,6 @@ class TestLeasesAndCrashRecovery(CoreBase):
 class TestConcurrency(CoreBase):
     def test_concurrent_writers(self):
         self._register_pair()
-        # Real clock for threads (shared mutable Clock isn't thread-relevant here).
         core.set_clock(__import__("time").time)
         errors = []
 
@@ -375,7 +556,7 @@ class TestConcurrency(CoreBase):
                 core.init_db(conn)
                 for i in range(10):
                     core.send_message(conn, "codex:A", "claude:B", f"m{n}-{i}",
-                                      authorship="user", idempotency_key=f"k-{n}-{i}")
+                                      authorship="agent", idempotency_key=f"k-{n}-{i}")
                 conn.close()
             except Exception as e:  # pragma: no cover - surfaced via assert below
                 errors.append(repr(e))
@@ -387,7 +568,7 @@ class TestConcurrency(CoreBase):
             t.join()
         self.assertEqual(errors, [], errors)
         count = self.conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"]
-        self.assertEqual(count, 50)  # 5 writers x 10, no lost/duplicated rows
+        self.assertEqual(count, 50)
 
 
 class TestLineEndingsAndPaths(CoreBase):

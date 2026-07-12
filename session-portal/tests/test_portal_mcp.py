@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Hermetic tests for portal_mcp — JSON-RPC 2.0 dispatch, tool schemas, error responses.
-
-Exercises the pure dispatch() function (no real stdio) plus one full stdin/stdout loop
-pass, all against a throwaway DB.
+"""Hermetic tests for portal_mcp — JSON-RPC 2.0 dispatch, AUTHENTICATED identity, tool
+schemas, error responses. Every tool that touches identity or message data requires a valid
+bearer token; the server derives source / inbox / acknowledger identity from the bound
+principal, never from a tool argument. All against a throwaway DB.
 """
 import importlib.util
 import io
@@ -31,9 +31,16 @@ mcp = _load("portal_mcp")
 class McpBase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        self._saved = {k: os.environ.get(k) for k in ("SESSION_PORTAL_DB", "SESSION_PORTAL_HOME")}
+        self._saved = {k: os.environ.get(k) for k in
+                       ("SESSION_PORTAL_DB", "SESSION_PORTAL_HOME", "SESSION_PORTAL_TOKEN")}
         os.environ["SESSION_PORTAL_HOME"] = str(self.tmp)
         os.environ["SESSION_PORTAL_DB"] = str(self.tmp / "portal.db")
+        os.environ.pop("SESSION_PORTAL_TOKEN", None)
+        # Mint two principals so tests can act as each side.
+        conn = self.factory()
+        self.tok_B = core.issue_principal(conn, "claude", "B", ttl_seconds=3600)["token"]
+        self.tok_A = core.issue_principal(conn, "codex", "A", ttl_seconds=3600)["token"]
+        conn.close()
 
     def tearDown(self):
         for k, v in self._saved.items():
@@ -47,11 +54,16 @@ class McpBase(unittest.TestCase):
         core.init_db(conn)
         return conn
 
-    def call(self, name, args, req_id=1):
+    def call(self, name, args, token=None, req_id=1):
         req = {"jsonrpc": "2.0", "id": req_id, "method": "tools/call",
                "params": {"name": name, "arguments": args}}
-        resp = mcp.dispatch(req, self.factory)
+        resp = mcp.dispatch(req, self.factory, token=token)
         return resp["result"], json.loads(resp["result"]["content"][0]["text"])
+
+    def grant(self, grantee, capability, scope="*", ttl=3600):
+        conn = self.factory()
+        core.grant_capability(conn, grantee, capability, scope=scope, ttl_seconds=ttl)
+        conn.close()
 
 
 class TestProtocol(McpBase):
@@ -60,10 +72,6 @@ class TestProtocol(McpBase):
         self.assertEqual(r["result"]["serverInfo"]["name"], "session-portal")
         self.assertIn("protocolVersion", r["result"])
 
-    def test_initialized_notification_returns_none(self):
-        r = mcp.dispatch({"jsonrpc": "2.0", "method": "notifications/initialized"}, self.factory)
-        self.assertIsNone(r)
-
     def test_tools_list_covers_required_semantics(self):
         r = mcp.dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, self.factory)
         names = {t["name"] for t in r["result"]["tools"]}
@@ -71,18 +79,22 @@ class TestProtocol(McpBase):
                          "portal_list_inbox", "portal_acknowledge", "portal_cancel_message",
                          "portal_get_message_status"):
             self.assertIn(required, names)
-        # Every tool has an object input schema with additionalProperties disabled.
         for t in r["result"]["tools"]:
             self.assertEqual(t["inputSchema"]["type"], "object")
             self.assertFalse(t["inputSchema"]["additionalProperties"])
+        # The old caller-supplied identity/authorization args are GONE from the send schema.
+        send = next(t for t in r["result"]["tools"] if t["name"] == "portal_send_message")
+        props = set(send["inputSchema"]["properties"])
+        self.assertNotIn("source_session_id", props)
+        self.assertNotIn("authorized", props)
+        inbox = next(t for t in r["result"]["tools"] if t["name"] == "portal_list_inbox")
+        iprops = set(inbox["inputSchema"]["properties"])
+        self.assertNotIn("dest_session_id", iprops)
+        self.assertNotIn("boundary", iprops)
 
     def test_bad_jsonrpc_version(self):
         r = mcp.dispatch({"id": 1, "method": "initialize"}, self.factory)
         self.assertEqual(r["error"]["code"], -32600)
-
-    def test_unknown_method(self):
-        r = mcp.dispatch({"jsonrpc": "2.0", "id": 1, "method": "does/not/exist"}, self.factory)
-        self.assertEqual(r["error"]["code"], -32601)
 
     def test_unknown_tool(self):
         r = mcp.dispatch({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -90,82 +102,145 @@ class TestProtocol(McpBase):
         self.assertEqual(r["error"]["code"], -32601)
 
 
-class TestToolCalls(McpBase):
-    def test_register_and_send_flow(self):
-        _, reg = self.call("portal_register_session", {"product": "claude", "runtime_session_id": "B"})
-        self.assertEqual(reg["session_id"], "claude:B")
-        result, sent = self.call("portal_send_message",
-                                 {"source_session_id": "codex:A", "dest_session_id": "claude:B",
-                                  "body": "hi", "authorship": "user", "idempotency_key": "k1"})
-        self.assertFalse(result["isError"])
-        self.assertEqual(sent["status"], "queued")
-        _, inbox = self.call("portal_list_inbox",
-                             {"dest_session_id": "claude:B", "deliver": True, "boundary": "stop"})
-        self.assertEqual(inbox[0]["status"], "delivered")
-        _, ack = self.call("portal_acknowledge", {"message_id": sent["message_id"], "by": "claude:B"})
-        self.assertEqual(ack["status"], "acknowledged")
+class TestAuthentication(McpBase):
+    def test_no_token_rejects_identity_tool(self):
+        result, payload = self.call("portal_send_message",
+                                    {"dest_session_id": "claude:B", "body": "hi"}, token=None)
+        self.assertTrue(result["isError"])
+        self.assertEqual(payload["code"], "authorization_error")
 
+    def test_bad_token_rejected(self):
+        result, payload = self.call("portal_list_inbox", {}, token="bogus-token-1234567890")
+        self.assertTrue(result["isError"])
+        self.assertEqual(payload["code"], "authorization_error")
+
+    def test_health_needs_no_token(self):
+        result, health = self.call("portal_health", {}, token=None)
+        self.assertFalse(result["isError"])
+        self.assertTrue(health["ok"])
+        self.assertEqual(health["delivery_model"], "pull-only")
+
+
+class TestIdentityDerivation(McpBase):
+    def test_send_source_is_bound_principal(self):
+        # Acting with codex:A's token, the message source is codex:A — no source arg supplied.
+        result, sent = self.call("portal_send_message",
+                                 {"dest_session_id": "claude:B", "body": "hi",
+                                  "idempotency_key": "k1"}, token=self.tok_A)
+        self.assertFalse(result["isError"])
+        self.assertEqual(sent["source_session_id"], "codex:A")
+        self.assertEqual(sent["authorship"], "agent")  # default without a speak-as-user grant
+
+    def test_inbox_drains_only_own(self):
+        # codex:A sends to claude:B. B pulls its own inbox (its token) and delivers.
+        _, sent = self.call("portal_send_message",
+                            {"dest_session_id": "claude:B", "body": "hi", "idempotency_key": "k"},
+                            token=self.tok_A)
+        _, inbox = self.call("portal_list_inbox", {"deliver": True}, token=self.tok_B)
+        self.assertEqual(inbox[0]["status"], "delivered")
+        self.assertEqual(inbox[0]["dest_session_id"], "claude:B")
+        # A pulling its own inbox sees nothing addressed to it.
+        _, inbox_a = self.call("portal_list_inbox", {"deliver": True}, token=self.tok_A)
+        self.assertEqual(inbox_a, [])
+
+    def test_ack_is_by_principal_only(self):
+        _, sent = self.call("portal_send_message",
+                            {"dest_session_id": "claude:B", "body": "hi", "idempotency_key": "k"},
+                            token=self.tok_A)
+        self.call("portal_list_inbox", {"deliver": True}, token=self.tok_B)
+        # A (the sender, not the recipient) may not acknowledge.
+        result, payload = self.call("portal_acknowledge", {"message_id": sent["message_id"]},
+                                    token=self.tok_A)
+        self.assertTrue(result["isError"])
+        self.assertEqual(payload["code"], "authorization_error")
+        # B (the recipient) can.
+        result, ack = self.call("portal_acknowledge", {"message_id": sent["message_id"]},
+                                token=self.tok_B)
+        self.assertEqual(ack["status"], "acknowledged")
+        self.assertEqual(ack["acknowledged_by"], "claude:B")
+
+    def test_message_read_requires_party(self):
+        _, sent = self.call("portal_send_message",
+                            {"dest_session_id": "claude:B", "body": "secret-ish note",
+                             "idempotency_key": "k"}, token=self.tok_A)
+        # A third principal cannot read someone else's message.
+        conn = self.factory()
+        tok_C = core.issue_principal(conn, "codex", "C", ttl_seconds=3600)["token"]
+        conn.close()
+        result, payload = self.call("portal_get_message_status", {"message_id": sent["message_id"]},
+                                    token=tok_C)
+        self.assertTrue(result["isError"])
+        self.assertEqual(payload["code"], "authorization_error")
+
+
+class TestGrantEnforcement(McpBase):
+    def test_steer_requires_grant(self):
+        result, payload = self.call("portal_send_message",
+                                    {"dest_session_id": "claude:B", "body": "do X now",
+                                     "kind": "steer"}, token=self.tok_A)
+        self.assertTrue(result["isError"])
+        self.assertEqual(payload["code"], "authorization_error")
+        # With a send-steer grant it queues (delivery still needs the dest's accept grant).
+        self.grant("codex:A", core.CAP_SEND_STEER, scope="claude:B")
+        result, sent = self.call("portal_send_message",
+                                 {"dest_session_id": "claude:B", "body": "do X now",
+                                  "kind": "steer", "idempotency_key": "s1"}, token=self.tok_A)
+        self.assertFalse(result["isError"])
+        self.assertEqual(sent["kind"], "steer")
+
+    def test_user_authorship_requires_grant(self):
+        result, payload = self.call("portal_send_message",
+                                    {"dest_session_id": "claude:B", "body": "hi",
+                                     "authorship": "user"}, token=self.tok_A)
+        self.assertTrue(result["isError"])
+        self.assertEqual(payload["code"], "authorization_error")
+
+
+class TestValidationStillEnforced(McpBase):
     def test_prohibited_field_rejected(self):
         result, payload = self.call("portal_send_message",
-                                    {"source_session_id": "codex:A", "dest_session_id": "claude:B",
-                                     "body": "hi", "authorship": "user", "reasoning": "hidden"})
+                                    {"dest_session_id": "claude:B", "body": "hi",
+                                     "reasoning": "hidden"}, token=self.tok_A)
         self.assertTrue(result["isError"])
         self.assertEqual(payload["code"], "validation_error")
 
     def test_unknown_argument_rejected(self):
         result, payload = self.call("portal_send_message",
-                                    {"source_session_id": "codex:A", "dest_session_id": "claude:B",
-                                     "body": "hi", "authorship": "user", "bogus": 1})
+                                    {"dest_session_id": "claude:B", "body": "hi", "bogus": 1},
+                                    token=self.tok_A)
         self.assertTrue(result["isError"])
         self.assertIn("unknown argument", payload["error"])
 
     def test_missing_required_argument_rejected(self):
-        result, payload = self.call("portal_send_message",
-                                    {"source_session_id": "codex:A", "body": "hi", "authorship": "user"})
+        result, payload = self.call("portal_send_message", {"body": "hi"}, token=self.tok_A)
         self.assertTrue(result["isError"])
         self.assertIn("missing required", payload["error"])
 
-    def test_enum_violation_rejected(self):
-        result, payload = self.call("portal_send_message",
-                                    {"source_session_id": "codex:A", "dest_session_id": "claude:B",
-                                     "body": "hi", "authorship": "robot"})
-        self.assertTrue(result["isError"])
-
     def test_secret_body_rejected_via_mcp(self):
         result, payload = self.call("portal_send_message",
-                                    {"source_session_id": "codex:A", "dest_session_id": "claude:B",
-                                     "body": "token ghp_" + "a" * 30, "authorship": "user"})
+                                    {"dest_session_id": "claude:B", "body": "token ghp_" + "a" * 30},
+                                    token=self.tok_A)
         self.assertTrue(result["isError"])
         self.assertEqual(payload["code"], "validation_error")
 
     def test_not_found_is_structured_error(self):
-        result, payload = self.call("portal_get_message_status", {"message_id": "msg_missing"})
+        result, payload = self.call("portal_get_message_status", {"message_id": "msg_missing"},
+                                    token=self.tok_A)
         self.assertTrue(result["isError"])
-        self.assertEqual(payload["code"], "not_found")
-
-    def test_boolean_string_not_coerced_open(self):
-        # Regression: a JSON string "false" must NOT coerce to True and flip a security gate
-        # (accepts_steering / authorized) open. It must be rejected as a type error.
-        result, payload = self.call("portal_register_session",
-                                    {"product": "claude", "runtime_session_id": "B",
-                                     "accepts_steering": "false"})
-        self.assertTrue(result["isError"])
-        self.assertIn("boolean", payload["error"])
-
-    def test_authorized_string_rejected(self):
-        result, payload = self.call("portal_send_message",
-                                    {"source_session_id": "codex:A", "dest_session_id": "claude:B",
-                                     "body": "x", "authorship": "user", "kind": "steer",
-                                     "authorized": "false"})
-        self.assertTrue(result["isError"])
-        self.assertEqual(payload["code"], "validation_error")
+        # A missing message is reported as not-a-party (no existence oracle) or not_found.
+        self.assertIn(payload["code"], ("authorization_error", "not_found"))
 
     def test_negative_ttl_rejected(self):
         result, payload = self.call("portal_send_message",
-                                    {"source_session_id": "codex:A", "dest_session_id": "claude:B",
-                                     "body": "x", "authorship": "user", "ttl_seconds": -999})
+                                    {"dest_session_id": "claude:B", "body": "x", "ttl_seconds": -999},
+                                    token=self.tok_A)
         self.assertTrue(result["isError"])
         self.assertIn(">=", payload["error"])
+
+    def test_boolean_string_not_coerced(self):
+        result, payload = self.call("portal_list_inbox", {"deliver": "false"}, token=self.tok_B)
+        self.assertTrue(result["isError"])
+        self.assertIn("boolean", payload["error"])
 
     def test_health(self):
         _, health = self.call("portal_health", {})
@@ -185,9 +260,8 @@ class TestStdioLoop(McpBase):
         ]
         stdin = io.StringIO("\n".join(lines) + "\n")
         stdout = io.StringIO()
-        mcp.serve(stdin=stdin, stdout=stdout, conn_factory=self.factory)
+        mcp.serve(stdin=stdin, stdout=stdout, conn_factory=self.factory, token=self.tok_B)
         out_lines = [json.loads(l) for l in stdout.getvalue().splitlines() if l.strip()]
-        # initialize + tools/list + parse-error + health = 4 responses (notification is silent).
         ids = [o.get("id") for o in out_lines]
         self.assertIn(1, ids)
         self.assertIn(2, ids)

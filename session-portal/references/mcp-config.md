@@ -8,29 +8,44 @@ Claude Code and with Codex so their tools appear. The command path below uses a
 placeholder that expands to the right install location for whichever product you are
 configuring.
 
+## Authentication: a per-session token
+
+The server binds its identity from a bearer token. Mint one per session (operator step) and
+copy it — it is shown only once:
+
+```bash
+python "{{SKILL_HOME}}/scripts/portal_admin.py" issue-principal --product claude --session <runtime-session-id> --label demo
+```
+
+Pass that token to the server in the `SESSION_PORTAL_TOKEN` environment variable in the MCP
+config for that session. The server then acts AS `claude:<runtime-session-id>` and a caller
+can never claim a different identity. Rotate by re-issuing; revoke with `revoke-principal`.
+
 ## The command
 
 The server is launched with:
 
 ```bash
-python "{{SKILL_HOME}}/scripts/portal_mcp.py"
+SESSION_PORTAL_TOKEN=<token> python "{{SKILL_HOME}}/scripts/portal_mcp.py"
 ```
 
 `{{SKILL_HOME}}` expands at install time to this skill's directory inside the product you
 deployed to (Claude Code or Codex). It speaks JSON-RPC 2.0 over stdio and binds nothing to
-the network.
+the network. Without a token the server still answers `portal_health` and the protocol
+methods, but every identity-bearing tool returns an `authorization_error`.
 
 ## Claude Code
 
 Add the server to your MCP configuration (project `.mcp.json` or the user scope). Example
-`.mcp.json`:
+`.mcp.json` (put the token in `env`, not in `args`):
 
 ```json
 {
   "mcpServers": {
     "session-portal": {
       "command": "python",
-      "args": ["{{SKILL_HOME}}/scripts/portal_mcp.py"]
+      "args": ["{{SKILL_HOME}}/scripts/portal_mcp.py"],
+      "env": { "SESSION_PORTAL_TOKEN": "<token minted for this session>" }
     }
   }
 }
@@ -44,12 +59,13 @@ The tools then appear as `portal_list_sessions`, `portal_get_session`,
 ## Codex
 
 Register the same stdio command with Codex's MCP configuration (the Codex install carries
-the interface manifest at `agents/openai.yaml`):
+the interface manifest at `agents/openai.yaml`), passing the session's token in the env:
 
 ```toml
 [mcp_servers.session-portal]
 command = "python"
 args = ["{{SKILL_HOME}}/scripts/portal_mcp.py"]
+env = { SESSION_PORTAL_TOKEN = "<token minted for this Codex session>" }
 ```
 
 ## Verifying
