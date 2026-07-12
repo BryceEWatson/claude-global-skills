@@ -7,6 +7,35 @@ This is a deploy-by-copy skills library (each skill is copied to
 `~/.claude/skills/<name>/`) rather than a versioned package, so releases are
 grouped by **date** instead of strict [Semantic Versioning](https://semver.org/).
 
+## [2026-07-11] — Cross-runtime skill sync (Claude Code + Codex)
+
+Skills can now deploy to Claude Code, Codex, or both from one shared source. The
+sync engine moves from live-authoritative to **repo-authoritative**.
+
+### Added
+
+- `targets:` frontmatter key — a skill declares `[claude]`, `[codex]`, or
+  `[claude, codex]` (absent → `[claude]`, so every existing skill is unchanged).
+- Per-target **overlays** (`<skill>/overlays/<target>/`, additive-only) so
+  product-only files (e.g. Codex's `agents/openai.yaml`) install to that product and
+  never leak into the other. A `{{SKILL_HOME}}` token expands to each target's install
+  path, keeping a single shared `SKILL.md` product-correct.
+- `scripts/sync.py` gains `--target claude|codex|both`; `--capture` requires an
+  explicit target and refuses to silently resolve a divergence between two live
+  copies. Homes are env-overridable (`CLAUDE_SKILLS_DIR` / `CODEX_SKILLS_DIR`).
+- `monitor-agent-thread` — the first dual-target skill: safely watch a Claude Code or
+  Codex session from the other product, with a projection that never exposes hidden
+  reasoning, raw tool arguments, signatures, encrypted content, or secrets.
+- Test suites for the sync engine, the monitor's privacy invariants (both
+  directions), and the drift hook — all wired into CI.
+
+### Changed
+
+- The drift hook is target-aware (detects `.claude/skills` vs `.codex/skills` edits
+  and emits the correctly-targeted capture command).
+- Docs (`README`, `CONTRIBUTING`, `SKILL-SPEC`) document the canonical model, target
+  declaration, overlays, the command surface, and the migration path.
+
 ## [2026-06-15] — Open-source preparation
 
 First public-release pass: licensing, contributor docs, privacy/security

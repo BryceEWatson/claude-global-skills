@@ -7,9 +7,12 @@ transcript retrospectives — that run **machine-wide with nothing but `python` 
 `node`**. No per-project install: drop a skill into `~/.claude/skills/` and invoke
 it as a slash command in any session.
 
-These are global (`~/.claude/skills/`) skills, version-controlled here so they can
-be reviewed, shared, and deployed to a fresh machine. The repo is the source of
-truth; the live copy under `~/.claude/skills/<name>/` is a deployed copy.
+These are global skills, version-controlled here so they can be reviewed, shared,
+and deployed to a fresh machine. **The repo is the source of truth**; each live copy
+is a deployed (materialized) copy. Most skills target **Claude Code**
+(`~/.claude/skills/`); a skill can also declare **Codex** (`~/.codex/skills/`) as a
+target and deploy to both from one shared source — see
+[Cross-runtime targets](#cross-runtime-targets-claude-code--codex).
 
 ## Quickstart
 
@@ -42,6 +45,7 @@ after copying. See each skill's section below.
 | [`pattern-retrospective`](pattern-retrospective/) | Mine your transcripts for recurring patterns with real rigor: audit-the-target-first discipline, streaming JSONL parse, 5-tuple extraction with provenance, self-falsification, and Krippendorff-α inter-rater checks. |
 | [`session-end`](session-end/) | Close out a session into an evidence-grounded record (decisions, claims + verification, assumptions, artifacts, reversals); mid-flight, also emits a ready-to-paste continuation prompt. |
 | [`session-pickup`](session-pickup/) | The inverse of `session-end`: rehydrate a continued session from the latest handoff, reconciled against current git/file state before acting. |
+| [`monitor-agent-thread`](monitor-agent-thread/) | Watch a live or recent Claude Code **or** Codex session from the other product via local session logs, with a safe projection that never exposes hidden reasoning, raw tool arguments, signatures, encrypted content, or secrets. The first **dual-target** skill (Claude + Codex). |
 
 ### Personal examples — wired to the author's setup; adapt before use
 
@@ -73,12 +77,57 @@ installing or contributing**, and review a skill's code before you deploy it.
 
 ## How this repo is maintained
 
-Skills are edited where they run (`~/.claude/skills/<name>/`) and captured back here
-as reviewed PRs; deploying the reverse direction (`repo → live`) sets up a fresh
-machine. The engine is `scripts/sync.py` (stdlib-only). Contributors don't need the
-maintainer's live tree — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
-outside-contributor path (`CLAUDE_GLOBAL_SKILLS_REPO` + `sync.py --deploy`), the
-test commands, and the merge gate.
+The repo is **canonical**: skills are authored here and *deployed* (materialized) to
+each live product tree. The engine is `scripts/sync.py` (stdlib-only):
+
+```bash
+python scripts/sync.py --deploy    # repo -> live, for each skill's declared targets
+python scripts/sync.py --check     # report drift (live vs the repo-materialized output)
+python scripts/sync.py --capture --target claude   # pull a live edit back into the repo
+```
+
+`--check`/`--deploy` with no `--target` act on each skill's **declared targets whose
+live home exists**, so `--deploy` then `--check` round-trips cleanly and a machine
+without Codex is never touched. `--capture` requires an explicit `--target` and
+refuses to silently resolve a divergence between two live copies. Contributors don't
+need the maintainer's live tree — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
+outside-contributor path, the test commands, and the merge gate.
+
+**Optional drift nudge.** `hooks/skills_drift_hook.py` reminds you to reconcile a
+skill you edited in a live tree. It's a `PostToolUse` hook — register it in
+`~/.claude/settings.json` (point `CLAUDE_GLOBAL_SKILLS_REPO` at your checkout):
+
+```json
+{ "hooks": { "PostToolUse": [ { "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+  "hooks": [ { "type": "command",
+    "command": "python \"$HOME/Projects/claude-global-skills/hooks/skills_drift_hook.py\"" } ] } ] } }
+```
+
+It's non-blocking (always exits 0), target-aware (Claude or Codex), and silenced with
+`CLAUDE_SKILLS_DRIFT_HOOK=0`.
+
+### Cross-runtime targets (Claude Code + Codex)
+
+A skill declares where it installs with an optional top-level `targets:` key in its
+`SKILL.md` frontmatter:
+
+```yaml
+targets: [claude, codex]   # dual-target;  omit the key entirely for Claude-only
+```
+
+- **Absent key → `[claude]`** (every existing skill is unchanged — backward compatible).
+- **Shared content lives once.** Files unique to one product go under
+  `<skill>/overlays/<target>/` and are *added* on top of the shared files at deploy
+  time (additive-only). This is how Codex's `agents/openai.yaml` reaches
+  `~/.codex/skills/` but is **never** installed into Claude Code.
+- **One `SKILL.md`, product-correct commands.** A `{{SKILL_HOME}}` token in shared
+  text expands to `$HOME/.claude/skills/<name>` or `$HOME/.codex/skills/<name>` per
+  target, so each install shows a runnable, product-correct path.
+
+`monitor-agent-thread` is the reference dual-target skill. Homes are env-overridable
+(`CLAUDE_SKILLS_DIR` / `CODEX_SKILLS_DIR`), which is how the test suite runs
+hermetically. Full contract: [`SKILL-SPEC.md`](SKILL-SPEC.md); migration from the
+previous Claude-only workflow: [`CONTRIBUTING.md`](CONTRIBUTING.md#migration).
 
 ## Documentation
 
