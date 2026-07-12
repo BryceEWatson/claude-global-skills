@@ -108,6 +108,13 @@ class TestTargetsParsing(SyncTestBase):
     def test_scalar(self):
         self.assertEqual(self._targets("---\ntargets: codex\n---\n"), ["codex"])
 
+    def test_utf8_bom_does_not_drop_targets(self):
+        # A SKILL.md saved with a UTF-8 BOM (PowerShell's `Out-File -Encoding utf8`
+        # emits one) must still parse `targets:`, not silently degrade to Claude-only.
+        p = self.repo / "SKILL.md"
+        p.write_bytes(b"\xef\xbb\xbf---\ntargets: [claude, codex]\n---\n")
+        self.assertEqual(sync.read_frontmatter_targets(p), ["claude", "codex"])
+
     def test_only_leading_frontmatter_parsed(self):
         # A `---` thematic break in the body must not be read as frontmatter.
         self.assertEqual(
@@ -449,6 +456,10 @@ class TestCapture(SyncTestBase):
         self.assertEqual(code, sync.EXIT_OK, out)
         self.assertIn("captured", out)
         self.assertNotIn("already in sync", out)
+        # The removal is surfaced for operator review before commit (an untracked,
+        # un-deployed repo file would otherwise be lost silently).
+        self.assertIn("REMOVED repo file", out)
+        self.assertIn("b.txt", out)
         # The repo file is gone; the surviving shared file is untouched.
         self.assertFalse((self.repo / "solo" / "b.txt").exists())
         self.assertTrue((self.repo / "solo" / "a.txt").exists())
