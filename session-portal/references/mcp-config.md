@@ -21,6 +21,11 @@ Pass that token to the server in the `SESSION_PORTAL_TOKEN` environment variable
 config for that session. The server then acts AS `claude:<runtime-session-id>` and a caller
 can never claim a different identity. Rotate by re-issuing; revoke with `revoke-principal`.
 
+**The token is a credential — do not commit it.** It grants that session's identity until it
+expires (default 12 h). Keep it in a user-scope config or a git-ignored file, never in a
+`.mcp.json` you commit. If one leaks, revoke it (`revoke-principal --session <id>`) and
+re-issue.
+
 ## The command
 
 The server is launched with:

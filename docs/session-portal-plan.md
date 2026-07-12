@@ -88,8 +88,10 @@ hardened design fixes that with three load-bearing decisions, all reflected belo
 - PR #15's two P2 findings resolved with regression tests, ordinary commits, no history
   rewrite. **(done: commit 970862b, 40 sync tests green, threads resolved.)**
 - All automated checks pass locally and in CI (Node + Python matrix, py_compile). The CI
-  Python suite includes `test_portal_e2e.py`, a cross-runtime round trip over the **real**
-  MCP stdio transport with authenticated principals (no admin/db shortcuts).
+  Python suite (`.github/workflows/ci.yml`, "Run session-portal tests") includes
+  `test_portal_e2e.py`, a cross-runtime round trip over the **real** MCP stdio transport with
+  authenticated principals. The send/pull/ack round trip itself uses no admin/db shortcuts;
+  token minting and DB teardown are the operator setup/teardown.
 - Portal deployed to **both** `~/.claude/skills` and `~/.codex/skills`; installed copies
   verified (Claude has no `agents/`/`overlays/`; Codex has `agents/openai.yaml`), not just
   repo fixtures.

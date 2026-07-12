@@ -183,6 +183,38 @@ class TestPrincipals(CoreBase):
         with self.assertRaises(core.AuthorizationError):
             core.resolve_principal(self.conn, old["token"])
 
+    def test_negative_ttl_rejected(self):
+        with self.assertRaises(core.ValidationError):
+            core.issue_principal(self.conn, "claude", "B", ttl_seconds=-3600)
+
+    def test_corrupt_salt_is_hard_error(self):
+        # A short/garbage salt must fail loudly, not silently hash tokens with a weak salt.
+        core.issue_principal(self.conn, "claude", "B")  # creates a valid salt
+        (self.tmp / ".token-salt").write_bytes(b"short")
+        with self.assertRaises(core.PortalError):
+            core.hash_token("anything")
+
+    def test_concurrent_salt_creation_is_single_winner(self):
+        # Exclusive create: many threads racing to first-create the salt must all end up with
+        # the SAME salt (else tokens minted under one salt would orphan under another).
+        salt_file = self.tmp / ".token-salt"
+        if salt_file.exists():
+            salt_file.unlink()
+        results, lock = [], threading.Lock()
+
+        def hash_it():
+            h = core.hash_token("same-input")
+            with lock:
+                results.append(h)
+
+        threads = [threading.Thread(target=hash_it) for _ in range(12)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(len(set(results)), 1, "salt race produced divergent salts")
+        self.assertEqual(len(salt_file.read_bytes()), 32)
+
 
 class TestGrants(CoreBase):
     def test_grant_and_check(self):
@@ -211,6 +243,16 @@ class TestGrants(CoreBase):
     def test_unknown_capability_rejected(self):
         with self.assertRaises(core.ValidationError):
             core.grant_capability(self.conn, "codex:A", "make-coffee")
+
+    def test_speak_as_user_must_be_global_scope(self):
+        # A narrow scope on a global capability would be silently ignored — reject it.
+        with self.assertRaises(core.ValidationError):
+            core.grant_capability(self.conn, "codex:A", core.CAP_SPEAK_AS_USER, scope="claude:B")
+        core.grant_capability(self.conn, "codex:A", core.CAP_SPEAK_AS_USER, scope="*")  # ok
+
+    def test_grant_negative_ttl_rejected(self):
+        with self.assertRaises(core.ValidationError):
+            core.grant_capability(self.conn, "codex:A", core.CAP_SEND_STEER, ttl_seconds=-1)
 
 
 class TestSessions(CoreBase):
@@ -400,6 +442,17 @@ class TestPullDeliveryGating(CoreBase):
         res = core.deliver_one(self.conn, m["message_id"], at_boundary=True, holder="h")
         self.assertTrue(res["delivered"])
         self.assertEqual(core.get_message_status(self.conn, m["message_id"])["status"], "delivered")
+
+    def test_delivery_audit_reflects_trigger_not_a_false_pull(self):
+        # An operator-vouched drain must NOT record "pulled by <dest>" (the recipient never
+        # pulled); the audit detail carries the actual boundary reason.
+        m = self._send(idempotency_key="k")
+        core.deliver_one(self.conn, m["message_id"], at_boundary=True, holder="h",
+                         boundary_reason="operator-asserted")
+        detail = [e["detail"] for e in core.message_events(self.conn, m["message_id"])
+                  if e["event"] == "delivered"][0]
+        self.assertNotIn("pulled by", detail)
+        self.assertIn("operator-asserted", detail)
 
 
 class TestSteeringGrants(CoreBase):

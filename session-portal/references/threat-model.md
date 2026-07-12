@@ -57,10 +57,15 @@ policy is **reject** (a clear, testable line) rather than silent redaction.
 
 ## Delivery safety
 
-- **Delivery is pull-only.** A message becomes `delivered` only when its authenticated
-  recipient pulls its own inbox. That pull is the only proof of receipt, so the portal never
-  fabricates a `delivered`, `resumed`, or native-delivered receipt it cannot back with a real
-  pull. There is no sender-side push and no caller-supplied delivery boundary.
+- **Delivery is pull-only over the transport.** Over the MCP transport a message becomes
+  `delivered` only when its authenticated recipient pulls its own inbox — the only proof of
+  receipt — so the portal never fabricates a `delivered`, `resumed`, or native-delivered
+  receipt across the transport. There is no sender-side push and no caller-supplied delivery
+  boundary. The one exception is the **operator CLI** (`portal_admin.py inbox --deliver
+  --at-boundary`): the operator is the local root of trust and may force a drain by
+  explicitly vouching for the boundary. That is an operator attestation, not the recipient's
+  own pull, and the audit trail records it as such (`delivered to <dest> (operator-asserted)`,
+  never `pulled by <dest>`).
 - **Boundary and liveness come from runtime-owned evidence.** The state classifier reads a
   session's own append-only log (read-only) plus optional host liveness evidence written by a
   runtime hook — never a caller-asserted `boundary` or `process_alive`. A quiet transcript

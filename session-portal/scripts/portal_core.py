@@ -209,7 +209,9 @@ CREATE TABLE IF NOT EXISTS principals (
     revoked      INTEGER NOT NULL DEFAULT 0,
     label        TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_principals_token ON principals(token_hash);
+-- No index on token_hash on purpose: resolve_principal scans all rows with a constant-time
+-- compare (hmac.compare_digest) rather than a hash-keyed lookup, so an index would never be
+-- consulted and could leak timing about which hash exists.
 
 -- Operator-issued capability grants (replace the old caller booleans). scope is a session
 -- id the capability is limited to, or '*' for any.
@@ -297,11 +299,17 @@ def _migrate_step(conn: sqlite3.Connection, from_version: int) -> None:
         # v1 -> v2: principals + auth_grants (created by executescript above), and new
         # message columns delivered_to / acknowledged_by. The legacy `authorized` column
         # (a caller boolean) is left in place but no longer consulted — grants supersede it.
+        # The ADD COLUMN is idempotent under a concurrent startup race: if another process
+        # added the column between our check and our ALTER, SQLite raises "duplicate column
+        # name" — tolerate that rather than aborting startup.
         cols = _column_names(conn, "messages")
-        if "delivered_to" not in cols:
-            conn.execute("ALTER TABLE messages ADD COLUMN delivered_to TEXT")
-        if "acknowledged_by" not in cols:
-            conn.execute("ALTER TABLE messages ADD COLUMN acknowledged_by TEXT")
+        for col in ("delivered_to", "acknowledged_by"):
+            if col not in cols:
+                try:
+                    conn.execute(f"ALTER TABLE messages ADD COLUMN {col} TEXT")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e).lower():
+                        raise
 
 
 # --------------------------------------------------------------------------- #
@@ -406,20 +414,78 @@ def _atomic(conn: sqlite3.Connection):
 # --------------------------------------------------------------------------- #
 # Principals (authenticated identity)
 # --------------------------------------------------------------------------- #
+_SALT_LEN = 32
+
+
+def _read_salt(p: Path) -> bytes | None:
+    """Read the salt file. Returns the salt if it is exactly _SALT_LEN bytes, None if the
+    file is absent or empty, and raises on a non-empty wrong-length file (corruption) rather
+    than silently hashing tokens with a weak salt."""
+    try:
+        b = p.read_bytes()
+    except FileNotFoundError:
+        return None
+    if len(b) == _SALT_LEN:
+        return b
+    if b:
+        raise PortalError(
+            f"portal token salt at {p} is corrupt ({len(b)} bytes, expected {_SALT_LEN}); "
+            "refusing to hash with it", code="salt_corrupt")
+    return None
+
+
 def _token_salt() -> bytes:
     """A machine-local salt so a stolen DB alone can't be brute-forced offline as easily.
-    Stored beside the DB (0600 where the OS supports it); created on first use."""
+    Stored beside the DB (0600 where the OS supports it); created exactly once, safely under
+    concurrent first-use.
+
+    The salt file anchors every issued token: if two processes both created it and the last
+    write clobbered the first, tokens minted under the first salt would orphan. So the winner
+    is chosen EXCLUSIVELY — a fully-written temp file is hard-linked into place (`os.link`
+    fails with FileExistsError if the target exists), so the final file is always a complete
+    _SALT_LEN bytes (never partial) and only one creator's salt ever lands; everyone else
+    reads that single winner. A hardlink-less filesystem falls back to an O_EXCL create."""
     p = portal_home() / ".token-salt"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    existing = _read_salt(p)
+    if existing is not None:
+        return existing
+
+    salt = secrets.token_bytes(_SALT_LEN)
+    tmp = p.with_name(f".token-salt.tmp-{os.getpid()}-{secrets.token_hex(6)}")
     try:
-        return p.read_bytes()
-    except (FileNotFoundError, OSError):
-        salt = secrets.token_bytes(32)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "wb") as fh:
+        with open(tmp, "wb") as fh:
             fh.write(salt)
+            fh.flush()
+            os.fsync(fh.fileno())
         with contextlib.suppress(OSError):
-            os.chmod(p, 0o600)
-        return salt
+            os.chmod(tmp, 0o600)
+        try:
+            os.link(tmp, p)  # atomic exclusive: fails if p already exists
+            return salt
+        except FileExistsError:
+            pass  # lost the race — fall through to read the winner
+        except (OSError, NotImplementedError):
+            # Filesystem without hardlink support: exclusive-create the final path directly.
+            try:
+                fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                pass
+            else:
+                try:
+                    os.write(fd, salt)
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+                return salt
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+
+    winner = _read_salt(p)
+    if winner is None:
+        raise PortalError(f"portal token salt at {p} could not be established", code="salt_corrupt")
+    return winner
 
 
 def hash_token(token: str) -> str:
@@ -434,6 +500,8 @@ def issue_principal(conn: sqlite3.Connection, product: str, runtime_session_id: 
     session_id = make_session_id(product, runtime_session_id)
     if label is not None and len(label) > MAX_LABEL_LEN:
         raise ValidationError(f"label exceeds {MAX_LABEL_LEN} chars")
+    if ttl_seconds is not None and ttl_seconds < 0:
+        raise ValidationError("ttl_seconds must be >= 0 (0 means never-expires)")
     token = secrets.token_urlsafe(32)
     th = hash_token(token)
     ts = now()
@@ -495,6 +563,13 @@ def grant_capability(conn: sqlite3.Connection, grantee: str, capability: str, *,
         raise ValidationError(f"unknown capability {capability!r}; allowed: {list(VALID_CAPABILITIES)}")
     if scope != "*":
         _valid_id(scope, "scope")
+    # speak-as-user is not counterparty-specific: authorship is a property of the sender, not
+    # of any one recipient. A narrow scope would be silently ignored by has_capability(scope=
+    # None) and read as universal, so reject it up front rather than mislead the operator.
+    if capability == CAP_SPEAK_AS_USER and scope != "*":
+        raise ValidationError("speak-as-user is a global capability; scope must be '*'")
+    if ttl_seconds is not None and ttl_seconds < 0:
+        raise ValidationError("ttl_seconds must be >= 0 (0 means never-expires)")
     ts = now()
     ttl = ttl_seconds if ttl_seconds is not None else DEFAULT_GRANT_TTL_SECONDS
     expires_at = ts + ttl if ttl and ttl > 0 else None
@@ -891,10 +966,14 @@ def deliver_one(conn: sqlite3.Connection, message_id: str, *, at_boundary: bool,
             out = get_message_status(conn, message_id)
             out["delivered"] = (row["status"] == STATUS_DELIVERED)
             return out
+        # Honest audit: record HOW the message was delivered (who vouched for the boundary),
+        # never a blanket "pulled by X" — an operator-forced drain is an operator attestation,
+        # not the recipient's own pull.
+        detail = f"delivered to {row['dest_session_id']} ({boundary_reason or 'boundary'})"
         _transition(conn, row, STATUS_DELIVERED,
                     extra={"delivered_at": now(), "delivered_to": row["dest_session_id"],
                            "attempts": int(row["attempts"]) + 1},
-                    event_detail=f"pulled by {row['dest_session_id']} ({boundary_reason})")
+                    event_detail=detail)
     finally:
         release_lease(conn, row["dest_session_id"], holder)
     out = get_message_status(conn, message_id)

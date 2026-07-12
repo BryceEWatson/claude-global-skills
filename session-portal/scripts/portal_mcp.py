@@ -113,8 +113,8 @@ _NO_AUTH_TOOLS = {"portal_health"}
 # authenticated session_id, or None for the no-auth tools.
 # --------------------------------------------------------------------------- #
 def _h_register(conn, a, principal):
-    product, runtime = principal.split(":", 1)
-    return core.register_session(conn, product, runtime, cwd=a.get("cwd"), label=a.get("label"))
+    return core.register_session(conn, core.product_of(principal), core.runtime_of(principal),
+                                 cwd=a.get("cwd"), label=a.get("label"))
 
 
 def _h_list_sessions(conn, a, principal):
@@ -143,8 +143,7 @@ def _h_list_inbox(conn, a, principal):
         # boundary. We additionally read its runtime-owned log to annotate (never to fetch a
         # caller-asserted boundary). A self-pull can only affect the caller's own session, so
         # it is always allowed; the annotation records the observed runtime state.
-        product, runtime = principal.split(":", 1)
-        cls = pstate.classify(product, runtime)
+        cls = pstate.classify(core.product_of(principal), core.runtime_of(principal))
         at_boundary = True
         reason = f"authenticated self-pull; runtime state={cls['state']}"
     return core.list_inbox(conn, principal, status=a.get("status"), deliver=deliver,

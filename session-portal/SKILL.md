@@ -103,8 +103,10 @@ Capabilities: `send-steer` (send a steering message to a scoped destination),
 - Prohibited content is rejected, never stored: hidden reasoning, raw tool arguments,
   signatures, encrypted blobs, system/developer instructions, credentials, tokens,
   environment values, and other secrets.
-- Delivery is pull-only: a message becomes delivered only when its authenticated recipient
-  pulls it. Nothing is ever pushed into, or resumed for, another session.
+- Delivery is pull-only over the transport: a message becomes delivered only when its
+  authenticated recipient pulls it. Nothing is ever pushed into, or resumed for, another
+  session. (The operator CLI can force a drain by vouching for the boundary; the audit trail
+  records that as an operator attestation, not a recipient pull.)
 - Loops and ping-pong are prevented by a forward-depth cap and a reversed-pair guard.
 
 ## Documentation
