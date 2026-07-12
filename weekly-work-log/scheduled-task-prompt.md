@@ -34,8 +34,15 @@ rules exactly. Do these steps in order.
 Distil **every** session in the digest into `src/data/work-log.source.json` so the page
 shows the whole week. Work in-context (no fan-out subagents — keeps voice + scrub under
 direct control). For each digest session **not already represented** in `source.json`
-(idempotency: match on `primaryCommit`, else session `id` / date+project — never duplicate
-an existing item, never touch a hand-authored one):
+(idempotency — never duplicate an existing item, never touch a hand-authored one):
+- **Public item (has a `primaryCommit`):** match on `primaryCommit` (stable across weeks).
+- **Private / display-role item (no `primaryCommit`):** match on the session `id` ALONE.
+  Do **not** fall back to `date+project` for these — display-role collapse maps many
+  distinct real projects onto one label (all client work → `Akaya`, all finance →
+  `Personal`), so two different private sessions on the same day share `date+project` and
+  would wrongly dedupe (one dropped) or overwrite each other. Always write `id` = the
+  digest session id so a re-run (catch-up double-fire, manual+cron overlap, a Step 5 retry)
+  matches the existing item instead of drafting a duplicate.
 
 - Write an `items[]` entry: `id` (the digest session id), `project`, `status`, `tier`,
   `title`, `summary`, and `"drafted": "auto-<today>"`.
@@ -92,20 +99,32 @@ Then GATE your own drafting before anything builds:
 ## 4. Fail-open advisory (judgment that ASSISTS, never gates)
 Write advisory notes to the gitignored `src/data/.local-state/advisory.md`. Wrap each check
 so one failure degrades to a one-line note; if the whole layer fails, leave the sidecar
-empty (step 5 prints a single "advisory unavailable" line). Leak-safe: counts + high-level
-only. The advisory may only DOWNGRADE/FLAG. Now that the feed is populated, these check your
-OWN distillation: #2 badge-vs-prose (reuse the claim lenses), #3 coverage (any session you
-failed to curate), #5 badge-vs-git reconciliation, #6 privacy (leak-by-meaning), #9 reversal
-coverage. Then run `node scripts/work-log-harvest-nouns.mjs` and surface ONLY the count.
+empty (step 5 prints a single "advisory unavailable" line). The advisory may only
+DOWNGRADE/FLAG. Now that the feed is populated, these check your OWN distillation:
+#2 badge-vs-prose (reuse the claim lenses), #3 coverage (any session you failed to curate),
+#5 badge-vs-git reconciliation, #6 privacy (leak-by-meaning), #9 reversal coverage. Then run
+`node scripts/work-log-harvest-nouns.mjs` and surface ONLY the count.
 
-## 5. Open exactly ONE PR (mandatory — run LAST and unconditionally)
+**Advisory is leak-safe by construction** (it is spliced into a PR body that goes LIVE on
+GitHub the moment Step 5 opens the PR — BEFORE Bryce reviews it, so it never gets the human
+gate the source items get): counts + high-level ONLY. When a check flags a PRIVATE /
+display-role item, name the CHECK and the generic label + count, NEVER the item's content —
+no client name, codename, repo, amount, or quoted prose. If you cannot phrase a note without
+referencing private content, omit that note. (`work-log-weekly.mjs` also scrubs the sidecar
+through the shared redactor before splicing and drops it to "advisory unavailable" on any
+denylist/PII hit — but do not rely on that; the constraint above is yours to honor.)
+
+## 5. Open exactly ONE PR (run LAST — mandatory UNLESS Step 0 or Step 3 told you to STOP)
 - `node scripts/work-log-weekly.mjs --advisory src/data/.local-state/advisory.md`. It
   rebuilds + re-verifies and, if the committed data changed, opens ONE PR on a fresh branch
   (never `main`, never deploy), splicing the advisory into the body. The PR carries the
   curated week + your `drafted`-marked items for Bryce to review and merge.
-- You MUST reach this step even if an advisory step failed. The PR is mandatory; the advisory
-  is optional. If `work-log-weekly.mjs` fails for a non-data reason, retry once WITHOUT
-  `--advisory`.
+- **"Unconditional" scopes to the ADVISORY (Step 4) only:** you MUST reach this step even if
+  an advisory check failed — the PR is mandatory, the advisory is optional. It does NOT
+  override the Step 0 / Step 3 hard-stops: if preflight aborted or the build could not be
+  made to verify, you already halted and never reach this step. A build/verification abort
+  is a DATA failure — never retry it into a PR. "Retry once WITHOUT `--advisory`" applies
+  ONLY to a non-data `work-log-weekly.mjs` failure (e.g. a transient `gh`/network error).
 
 ## 6. Report
 Report: PR opened (URL) or why not; the build verification result; how many sessions were
