@@ -181,7 +181,10 @@ def read_frontmatter_targets(skill_md: Path) -> list[str]:
     degrade to Claude-only, which would hide a dropped Codex target).
     """
     try:
-        text = _read_norm(skill_md).decode("utf-8", errors="replace")
+        # utf-8-sig so a leading BOM (PowerShell's `Out-File -Encoding utf8`
+        # emits one) can't defeat the `---` fence check below and silently
+        # degrade a `targets: [claude, codex]` skill back to Claude-only.
+        text = _read_norm(skill_md).decode("utf-8-sig", errors="replace")
     except OSError:
         return ["claude"]
     lines = text.split("\n")
@@ -777,6 +780,22 @@ def do_capture(arg_target, only=None) -> int:
         print(f"\nnothing captured (target {target}).")
     for n in notes:
         print(f"note: {n}")
+
+    # Capture represents live deletions as repo-file removals (intended). Surface
+    # them explicitly: a removal is recoverable via git for a tracked file, but a
+    # brand-new UNTRACKED repo file (added, not yet committed or deployed) would be
+    # lost silently. Let the operator confirm each removal is a real live deletion.
+    deleted = [p for p in changed_files if not Path(p).exists()]
+    if deleted:
+        print("\n! capture REMOVED repo file(s) — confirm each is an intended live "
+              "deletion, not un-deployed work (untracked files are unrecoverable):")
+        root = repo_root()
+        for d in deleted:
+            try:
+                rel = Path(d).resolve().relative_to(root.resolve())
+            except ValueError:
+                rel = d
+            print(f"   - {rel}")
 
     warnings = cruft_scan(changed_files)
     if warnings:
