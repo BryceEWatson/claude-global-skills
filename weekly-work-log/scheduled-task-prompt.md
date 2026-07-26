@@ -11,24 +11,52 @@ the PR is the approval gate (Bryce reviews + merges; CI deploys the merge).
 
 ---
 
-You are the unattended Weekly Work Log runner for brycewatson.com. Work entirely in
-`C:\Users\Bryce\Projects\brycewatson.com`. Follow `~/.claude/skills/weekly-work-log/SKILL.md`
-rules exactly. Do these steps in order.
+You are the unattended Weekly Work Log runner for brycewatson.com. The user's checkout at
+`C:\Users\Bryce\Projects\brycewatson.com` is READ-ONLY coordination state. Do all report
+work in the dedicated worktree `C:\Users\Bryce\Projects\brycewatson.com-weekly-work-log`.
+Follow `~/.claude/skills/weekly-work-log/SKILL.md` rules exactly. Do these steps in order.
 
-## 0. Preflight (abort safely on any problem)
-- `cd` to the repo. Confirm it is a git repo, on branch `main`, with a CLEAN working
-  tree (`git status --porcelain` empty) and `gh auth status` OK.
-- If the tree is dirty, you are not on `main`, or `gh` is not authenticated: STOP. Do
-  nothing else, open no PR, and report why. Never commit or stash someone else's work.
-- `git fetch origin` and fast-forward `main` if behind. Do NOT force anything.
+## 0. Preflight (isolated, visible, bounded)
+- Record the run immediately:
+  `node "{{SKILL_HOME}}/run-state.cjs" start --worktree "C:/Users/Bryce/Projects/brycewatson.com-weekly-work-log"`
+- Treat `C:\Users\Bryce\Projects\brycewatson.com` as `BASE` and the dedicated sibling
+  path above as `WORKTREE`. Confirm BASE is a git repo and `gh auth status` is OK. Do NOT
+  require BASE to be on `main` or clean. Never checkout, reset, stash, commit, or clean BASE.
+- From BASE, run `git fetch origin main`. If it fails for a transient network reason,
+  retry it exactly ONCE, then stop. Never loop.
+- Check for an already-open PR whose head starts `work-log/weekly-`. If one exists and its
+  changed files include BOTH `src/data/work-log.source.json` and
+  `src/data/work-log.json`, record success with outcome `PR_ALREADY_OPEN` and its URL,
+  report it, and STOP without creating a duplicate.
+- Prepare WORKTREE from `origin/main` without disturbing BASE:
+  1. Inspect `git -C BASE worktree list --porcelain`.
+  2. If WORKTREE is registered, inspect `git -C WORKTREE status --porcelain`. If dirty,
+     STOP rather than deleting work. If clean, remove it with
+     `git -C BASE worktree remove --force WORKTREE`.
+  3. If WORKTREE exists but is not registered, STOP. Never recursively delete an
+     unregistered directory.
+  4. Run `git -C BASE worktree prune`, then
+     `git -C BASE worktree add --detach WORKTREE origin/main`.
+  5. If the add fails, prune and retry the add exactly ONCE. Then stop on failure.
+- `cd` to WORKTREE. Confirm it is clean and `HEAD` equals `origin/main`. All remaining
+  commands in this task run in WORKTREE.
+- On EVERY hard-stop path, first persist the failure:
+  `node "{{SKILL_HOME}}/run-state.cjs" fail --reason-code <CODE> --message "<one-line public-safe reason>"`
+  Then report the same reason. The durable state is what makes a failed Sunday run visible
+  to Monday's preview routine.
 
 ## 1. Discover (deterministic, redacted, no LLM)
-- `node scripts/draft-work-log-from-handoffs.mjs` (handoff claims/reversals digest).
+- `node scripts/draft-work-log-from-handoffs.mjs` — handoff claims/reversals/open-threads
+  digest, written to `src/data/work-log.handoffs.json`.
 - `node scripts/draft-work-log-sessions.mjs` (the per-session digest — the unit of
   curation). This writes the redacted, bounded `src/data/work-log.drafts.json`: one
   entry per interactive Claude Code session of the week (id, date, project, repo,
-  `isPrivate`, redacted `userPrompts` steers, `toolCounts`, redacted `candidateCommits`).
-  It is already scrubbed; read ONLY this digest, never raw transcripts.
+  `isPrivate`, redacted `userPrompts` steers, the assistant's own redacted `assistantNotes`
+  reasoning, `toolCounts`, redacted `candidateCommits`).
+- The two digests are SEPARATE files (they used to share one path and the second run
+  clobbered the first). Both are already scrubbed; read ONLY these digests, never raw
+  transcripts. Distil from BOTH: the handoff digest carries the tagged claims, reversals,
+  and decisions; the session digest carries the per-session steers + assistant reasoning.
 
 ## 2. Curate EVERY session (the distillation — in-context, NOT subagents)
 Distil **every** session in the digest into `src/data/work-log.source.json` so the page
@@ -53,7 +81,9 @@ direct control). For each digest session **not already represented** in `source.
   `objectiveId` (they must stay off `/goals`).
 - **Voice (load-bearing):** plain, professional, **subject-led** titles (lead with the
   work, NOT "I"/"My"); narrative summary; **no em dashes, no " -- "**; **never announce
-  the page's own honesty**. The "steer→work→catch" arc is REJECTED — title + summary only.
+  the page's own honesty, and never narrate the withholding** (no "keeping it sealed",
+  "surfaced here as its own thread", "belongs in an honest log"). The
+  "steer→work→catch" arc is REJECTED — title + summary only.
 - **Status (honest badge):** `shipped` (built + verified), `in progress`, or
   `designed, not proven` (machinery exists, no real result yet). Map a handoff `[verified]`
   claim → shipped; `[assumed]`/`[unverified]` → designed-not-proven. Mixed session → lead
@@ -71,10 +101,13 @@ direct control). For each digest session **not already represented** in `source.
   clad rules around it."*). For a display-role project (`Akaya` = the client codename
   `dropKnowledge`; `Personal` = `Finances`; `ShopForge`): write a generalized entry
   describing only the KIND of work (e.g. "Built a trustworthy evaluation harness for the
-  question-answering system"; "Worked through personal financial planning"). **Accuracy is
-  the hard floor even here.** NO `primaryCommit`, NO `repo`, NO `snippets.verify` — these
-  repos are NEVER git-read. Use the session `date`. Never name the client, niche, people,
-  product, accounts, amounts, or codenames.
+  question-answering system"; "Worked through personal financial planning"). **Write it
+  like any other entry: say what the work WAS, never that you are withholding it.** NO
+  "keeping the specifics sealed", "recording only the kind of work", "surfaced here as its
+  own thread", "keeping it generic here", "belongs in an honest log", or "not
+  public-facing". **Accuracy is the hard floor even here.** NO `primaryCommit`, NO `repo`,
+  NO `snippets.verify` — these repos are NEVER git-read. Use the session `date`. Never name
+  the client, niche, people, product, accounts, amounts, or codenames.
 - **Per-project goal lines:** for any project new to `source.json`, add a `projects[]` entry
   with a durable `mission` (from the project's CHARTER/README, not one week) + a this-week
   `frontier` (derived). Display-role projects get a generalized mission too.
@@ -88,11 +121,13 @@ Then GATE your own drafting before anything builds:
   drafted item — does the badge overstate the evidence? Downgrade any overstated badge.
 
 ## 3. Build (deterministic backstop; must pass or NO PR)
-- `node scripts/build-work-log.mjs`. It re-derives every date/number from git, verifies
-  every cited commit resolves and is Bryce's (ABORTS otherwise), redacts, and writes
-  `work-log.json` + `reports/<week>.json` + `goals.json`. If it aborts (a commit you cited
-  did not resolve / is not Bryce's), FIX that item (correct or remove the commit) and re-run.
-  If it cannot be made to pass, STOP and open NO PR.
+- `node scripts/work-log-via-honestweek.mjs` (the honestweek engine). It re-derives every
+  date/number from git, verify-or-aborts every cited commit (resolves + is Bryce's), runs a
+  numeric fact-fence over the output, redacts, and writes `work-log.json` +
+  `reports/<week>.json` + `reports/index.json` + `goals.json`. If it aborts (a commit you
+  cited did not resolve / is not Bryce's, or a number does not trace to a verified value),
+  FIX that item (correct or remove the commit) and re-run. If it cannot be made to pass,
+  STOP and open NO PR.
 - Do NOT pass `--week` (no backfill from the cron). Do NOT hand-edit `work-log.json`,
   `reports/*`, or `goals.json` — only the build writes them.
 
@@ -125,8 +160,15 @@ denylist/PII hit — but do not rely on that; the constraint above is yours to h
   made to verify, you already halted and never reach this step. A build/verification abort
   is a DATA failure — never retry it into a PR. "Retry once WITHOUT `--advisory`" applies
   ONLY to a non-data `work-log-weekly.mjs` failure (e.g. a transient `gh`/network error).
+  Retry exactly ONCE, never more. If the retry fails, persist `PR_OPEN_FAILED` before
+  stopping.
 
 ## 6. Report
-Report: PR opened (URL) or why not; the build verification result; how many sessions were
-curated (public vs private-redacted); which advisory checks ran vs degraded. Do not deploy.
-Do not merge. Leave `main` untouched. The PR is the human approval gate.
+Before reporting, persist the terminal result. For an opened PR:
+`node "{{SKILL_HOME}}/run-state.cjs" success --outcome PR_OPENED --pr-url "<url>" --pr-number "<number>" --week-start "<YYYY-MM-DD>" --week-end "<YYYY-MM-DD>"`
+If verified data produced no change, use outcome `NO_CHANGE`. Report: PR opened (URL) or why
+not; the build verification result; how many sessions were curated (public vs
+private-redacted); which advisory checks ran vs degraded. Do not deploy. Do not merge.
+Remove the clean dedicated WORKTREE after recording the result; if cleanup fails, report it
+without changing the successful run status. Leave the user's BASE checkout untouched. The
+PR is the human approval gate.

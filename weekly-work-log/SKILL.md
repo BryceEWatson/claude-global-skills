@@ -23,7 +23,7 @@ The report always covers the most recently **completed Monday–Sunday week** (a
 
 Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under `C:\Users\Bryce\Projects\`); GitHub Pages CI cannot. The committed JSON is what CI builds, exactly like `art.json`/`books.json`.
 
-- `<repo>/src/data/work-log.source.json` — AUTHORED, approval-gated content (the human gate).
+- `<repo>/src/data/work-log.source.json` — approval-gated content (the human gate): Claude distills it from the week's handoffs + redacted session digest + git; you review and approve the PR; the generator verifies every number. Prose is distilled and human-reviewed, not number-verified.
 - `<repo>/src/data/work-log.json` — GENERATED + committed (every number re-derived + git-verified).
 - `<repo>/src/data/reports/<weekStart>.json` + `reports/index.json` — committed per-week snapshots (the `/log` archive series); the generator writes these.
 - `<repo>/src/data/goals.json` — GENERATED + committed (the `/goals` cross-week aggregation).
@@ -34,16 +34,24 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
 - `<repo>/scripts/draft-work-log-proposed.mjs` — ranked `.proposed` distil scaffold (interactive; the builder NEVER reads it).
 - `<repo>/scripts/work-log-harvest-nouns.mjs` — propose redactor denylist additions → gitignored sidecar (count surfaced, never raw nouns).
 - `<repo>/scripts/work-log-validate-source.mjs` — voice/leak gate on the DRAFTED source prose (fails loud on a dash / denylisted token / bad badge / display-role git-leak), run after distillation and before the build (also chained in `pnpm build`).
-- `<repo>/scripts/build-work-log.mjs` — build (re-derive + verify every commit, redact).
+- `<repo>/scripts/work-log-via-honestweek.mjs` — build (the [honestweek](https://github.com/BryceEWatson/honestweek) engine: verify-or-abort every commit, re-derive + number-fence every number, redact, then write work-log.json + the /log snapshot + index + goals.json). `<repo>/scripts/build-work-log.mjs` is retained as the parity oracle (`scripts/work-log-parity.mjs` proves the two agree on all four artifacts).
 - `<repo>/scripts/work-log-weekly.mjs` — open the review PR (`--advisory <path>` splices the fail-open advisory; never main, never deploy).
 - `<repo>/scripts/lib/work-log-redact.mjs` — shared secret/leak scrubber (the ONE canonical redactor; extend its term lists, never duplicate).
+- `~/.claude/skills/weekly-work-log/run-state.cjs` — atomically records a privacy-safe
+  `running` / `succeeded` / `failed` status for the Sunday run. The Monday preview reads
+  this instead of treating every missing PR as a quiet no-op.
 
 ## Modes
 
 - **`/weekly-work-log`** (interactive, a human in the loop): the full build — discover → distil candidates → build → preview. New items get WRITTEN here (judgment). The optional `.proposed` scaffold (`draft-work-log-proposed.mjs`) gives you a ranked, mirror-shaped starting point to fill in the public voice; you then MOVE accepted items by hand into `source.json` (the gate).
 - **Unattended (the Sunday-night Claude scheduled task)** — curates the whole week, then opens one PR:
+  - **Isolated checkout:** the user's `brycewatson.com` checkout is never switched,
+    reset, stashed, or cleaned. The task fetches `origin/main` and works in the dedicated
+    sibling worktree `brycewatson.com-weekly-work-log`. A clean registered stale worktree
+    may be replaced; a dirty or unregistered directory is preserved and surfaced as a
+    failed run.
   - **Curate every session (distillation):** distil EVERY interactive Claude Code session of the week into `source.json` items so the page shows the full week (the original "curate every session" directive, automated). Done in-context from the redacted digest (not subagents). Private/sensitive sessions are **summarized through the privacy filter, not dropped or stubbed** (display roles: Akaya/Personal/ShopForge — generalized to the kind of work, never git-read; "personal finance is fine, we just need iron clad rules"). Each item is linked to the SPECIFIC goal it advances via `objectiveId` (read `objectives.public.json`) — never leave a multi-goal project like Command to fall through to its catch-all/parent goal, or the goal lens collapses to one bucket; client/private items get no `objectiveId` (they stay off `/goals`). The drafted prose is gated by `work-log-validate-source.mjs` (fails loud on a dash/leak/bad-badge) + a claim-falsification self-check BEFORE the build.
-  - **Deterministic backstop:** `build-work-log.mjs` git-verifies every number (aborts on any unresolved/non-Bryce commit, so NO PR on bad data). Items the job drafts carry `"drafted": "auto-<date>"`.
+  - **Deterministic backstop:** `work-log-via-honestweek.mjs` (honestweek) git-verifies + number-fences every number (aborts on any unresolved/non-Bryce commit, so NO PR on bad data). Items the job drafts carry `"drafted": "auto-<date>"`.
   - **Fail-open advisory:** judgment that ASSISTS the reviewer (badge-vs-prose, coverage gaps, badge-vs-git, a downgrade-only privacy adjudicator, reversal-coverage) spliced into the PR body, plus the noun-harvester (count only). Any LLM/network/`gh` failure → a single "advisory unavailable" line; never blocks the PR. Advisory may only DOWNGRADE/FLAG.
   - **The PR is the gate:** auto-DRAFT, human-APPROVE. The run never pushes `main`, never deploys, opens exactly one PR.
 - **`--week YYYY-MM-DD`**: backfill a past completed week's archive (see above). Manual only.
@@ -53,13 +61,13 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
 
 1. **Discover** — `node scripts/draft-work-log-from-handoffs.mjs` (and/or `draft-work-log-sessions.mjs`). Scans the week's session-end handoffs / interactive sessions across the allowlisted repos, extracts tagged claims + reversals + cited commits, redacts, writes the gitignored `src/data/work-log.drafts.json` digest.
 2. **Curate every session** — `node scripts/draft-work-log-sessions.mjs` for the redacted per-session digest, then distil EVERY session into `source.json` items in the plain public voice (private/sensitive sessions summarized through the privacy filter, never dropped — see the rules + the unattended prompt `scheduled-task-prompt.md`). `draft-work-log-proposed.mjs` can give a ranked scaffold to fill. Then `node scripts/work-log-validate-source.mjs` (fails loud on a dash/leak/bad-badge) before building. Obey every rule below; accuracy is the floor even for private.
-3. **Build** — `node scripts/build-work-log.mjs`. Re-derives every date/number from git, rewrites commit snippets to the real subject, verifies all cited commits resolve (aborts if any do not), redacts. Writes `work-log.json` (+ snapshot + `goals.json`).
+3. **Build** — `node scripts/work-log-via-honestweek.mjs` (the honestweek engine). Re-derives every date/number from git, rewrites commit snippets to the real subject, verify-or-aborts all cited commits, number-fences every number, redacts. Writes `work-log.json` (+ snapshot + index + `goals.json`). `build-work-log.mjs` is the parity oracle; `node scripts/work-log-parity.mjs` proves they agree.
 4. **Preview** — `pnpm dev`, open `http://localhost:4321/weekly-report` (archive index at `/log`, goals at `/goals`).
 5. **Ship** — commit the data files. A merge to `main` deploys via CI. (Unattended: `node scripts/work-log-weekly.mjs --advisory <sidecar>` opens the PR instead of committing to main.)
 
 ## The rules (load-bearing — every run, especially unattended, must honor these)
 
-- **Voice**: plain, concrete, no marketing flourishes. **Subject-led headlines** — lead with the work or the finding, NOT "I"/"My" (headlines must not all start the same way or read self-focused). First-person belongs in the body. **No em dashes.** **Never announce the page's own honesty** ("honest", "keeping myself honest", "proof I don't fake it") — show it through the badges + receipts.
+- **Voice**: plain, concrete, no marketing flourishes. **Subject-led headlines** — lead with the work or the finding, NOT "I"/"My" (headlines must not all start the same way or read self-focused). First-person belongs in the body. **No em dashes.** **Never announce the page's own honesty** ("honest", "keeping myself honest", "proof I don't fake it") — show it through the badges + receipts. **This includes generalized/private entries: state the KIND of work concretely (like any public entry) and NEVER narrate the withholding itself** ("keeping it sealed", "recording only the kind of work", "surfaced here as its own thread", "keeping it generic here", "belongs in an honest log") — model on the Akaya display-role rows.
 - **Honest status badges**: `shipped` (built, merged, verified), `in progress`, `designed, not proven` (machinery exists, no real result yet). The most interesting work is often the least finished; let it wear the badge openly. Map a handoff's `[verified]` claim → shipped; `[assumed]`/`[unverified]`/`[handoff-claimed]` → designed-not-proven.
 - **Every number git-verified**: re-derived at build, never hardcoded. A cited commit that does not resolve (or is not Bryce's: `bryceewatson@gmail.com` / `bryceewatson@users.noreply.github.com`) aborts the build. Item dates come from the commit, not the prose.
 - **Privacy** (default-deny): only Bryce's OWN repos are read (Command, DemandForge, claude-global-skills, brycewatson.com). Client / no-remote repos (dropKnowledge, etc.) are never read or named. The shared redactor scrubs codenames (plumagedispatch), client names (dropKnowledge / castgryff), vendor + niche names, session UUIDs, home paths, and secrets. **Draft-and-distil, never lift**: handoff prose is operational and leaky; distil it into plain public-voice items, never paste it verbatim. The `.proposed` scaffold and the harvester sidecar are gitignored; never commit them, and never route raw harvested nouns into the PR body (count only).
@@ -70,7 +78,7 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
 
 The unattended weekly run is a **Claude scheduled task** (`mcp__scheduled-tasks`), NOT a Windows Task Scheduler job. It runs as a local Claude agent with full filesystem access and **catches up on next app launch** if the app/machine was closed at the scheduled time — fixing the old `schtasks` job's silent-drop failure (it had `StartWhenAvailable=False` / `WakeToRun=False` / `DisallowStartIfOnBatteries=True` and no catch-up).
 
-- **The task**: `taskId: weekly-work-log`, `cronExpression: "0 22 * * 0"` (Sunday 22:00 local). Its prompt is authored in `scheduled-task-prompt.md` (this skill dir) — keep that file in sync with the live task.
+- **The task**: `taskId: weekly-work-log`, `cronExpression: "0 22 * * 0"` (Sunday 22:00 local). Its prompt is authored in `scheduled-task-prompt.md` (this skill dir) — keep that file in sync with the live task. Its Monday preview prompt is authored in `preview-scheduled-task-prompt.md` and accepts only a verified `work-log/weekly-*` PR that changes both the authored source and generated report.
 - **Create / update it** (the runtime swap; done by an operator session after the repo seams are on `main`):
   ```
   mcp__scheduled-tasks__create_scheduled_task({
@@ -82,12 +90,20 @@ The unattended weekly run is a **Claude scheduled task** (`mcp__scheduled-tasks`
   ```
   Confirm with `mcp__scheduled-tasks__list_scheduled_tasks`.
 - **Retire the legacy Windows task** at the same swap: `node uninstall.cjs` (or `schtasks /Delete /TN ClaudeWeeklyWorkLog /F`). `install.cjs` / `weekly-run.cmd` are the **legacy** schtasks launchers, retired at the swap; do not run `install.cjs` going forward.
+- **Failure visibility:** every run starts by writing `last-run.json` under the live
+  scheduled-task directory and must write one terminal state. Fetch/worktree setup and a
+  non-data PR-open failure retry exactly once; data verification never retries into a PR.
 - **Verification debt**: the run-on-next-launch catch-up is documented, not yet behaviorally proven here. Worth a one-time controlled catch-up test (close the app over a due time, relaunch, confirm fire) before fully trusting it — the `demandforge-verify-cron-first-firing` task is precedent.
-- It **activates once the page is shipped** (the data files are committed). Requires: `gh` authenticated; git push credentials; the repo on a clean `main`.
+- It **activates once the page is shipped** (the data files are committed). Requires:
+  `gh` authenticated and git push credentials. The shared repo may be on any branch and
+  may contain the user's work because the scheduled run operates from `origin/main` in
+  its own worktree.
 
 ## Safety invariants
 
 - Never push to `main`; never deploy; only ever open a PR. The unattended run opens **exactly one** PR.
+- Never mutate the user's shared checkout. All unattended writes happen in the dedicated
+  worktree; every setup or terminal failure is persisted before the task exits.
 - Abort (no PR) if the generator fails verification — never open a PR with unverified data.
 - **Advisory is fail-open**: any LLM/network/`gh` failure → a single "advisory unavailable" line; the PR still opens with deterministic data + the human checklist intact. Advisory may only DOWNGRADE/FLAG — never clear-for-publish, never suppress the human leak/voice checklist.
 - The cron NEVER fires `--week` backfill; the harvester's raw nouns NEVER enter the PR body (count only).
