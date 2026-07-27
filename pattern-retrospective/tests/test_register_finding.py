@@ -247,9 +247,9 @@ class TestConfidenceGate(unittest.TestCase):
 class TestUncommittedWarning(unittest.TestCase):
     """A tracked-but-uncommitted row is discarded by any working-tree revert.
 
-    Two real retros lost every finding they registered this way: the rows went
-    to the working tree of a repo with many concurrent agent worktrees, and a
-    `git restore` put the file back to its committed state.
+    Observed twice in one 13-hour window: rows were appended to the working tree
+    of a repo with many concurrent agent worktrees, and a `git restore` put the
+    file back to its committed state.
     """
 
     def _git(self, cwd, *args):
