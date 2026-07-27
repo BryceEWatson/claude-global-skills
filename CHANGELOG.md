@@ -7,6 +7,81 @@ This is a deploy-by-copy skills library (each skill is copied to
 `~/.claude/skills/<name>/`) rather than a versioned package, so releases are
 grouped by **date** instead of strict [Semantic Versioning](https://semver.org/).
 
+## [2026-07-27] — Record-keeping fixes: ledger closure, confidence gate, handoff provenance
+
+Two independent defects in how these skills keep records. Both let a record
+misrepresent itself to whoever read it next.
+
+### Fixed
+
+- **`pattern-retrospective` — a finding could never be closed.** The registry is
+  append-only, so a resolved finding is retracted by appending a successor row
+  carrying `supersedes: <old-id>`; nothing ever updated the superseded row, which
+  kept `follow_up_status: pending` forever. `follow_up_check.py` reported resolved
+  work as permanently past-due (one real finding showed as 27 days overdue three
+  weeks after it was resolved), and a report that flags finished work as late is one
+  the reader learns to skip. Closure is now **derived at read time**: a row that
+  another row *in the same registry* supersedes is treated exactly as
+  `follow_up_status: superseded`. Chose the reader-side fix over writing back to the
+  superseded row because the registry's append-only invariant forbids editing a row
+  in place — and a derivation also closes rows that were already written.
+- **`pattern-retrospective` — `--confidence` could contradict its own evidence.**
+  The counts and the confidence live in the same row, so a hand-picked number
+  silently overstated the evidence. `--confidence` is now optional (computed from
+  `supporting / (supporting + contradicting + 2)`, the skill's own §7 formula) and a
+  supplied value that disagrees with the counts by more than 0.005 is refused with
+  exit 5 and a message naming the expected value. Existing rows are never rewritten.
+  Negative evidence counts are also refused, instead of reaching a division by zero.
+
+### Added
+
+- `follow_up_check.py --include-superseded` lists closed rows again, marked
+  `(closed: superseded)`; `--format json` rows carry `closed_by_supersedes`. The
+  default output **counts** what it hid in the summary line, so the suppression is
+  visible rather than silent.
+- `session-end` — a **provenance rule for load-bearing handoff claims**, with
+  `[derived]` added to the existing `[verified]` / `[unverified]` / `[assumed]`
+  vocabulary. `[derived]` is the tier that was missing: an inference is grounded
+  enough to *feel* verified, so it gets written in the voice of a measurement. A real
+  handoff asserted "the `review-pr` skill template is the source of that divergence"
+  — an inference, and wrong; the divergence was a deliberate safety separation, and
+  the next session nearly "repaired" it into letting an untested review auto-merge its
+  own changes. The rule covers diagnoses and mechanisms, not just numbers, and applies
+  hardest to the mid-flight block and the continuation prompt, where claims travel
+  furthest from their evidence.
+- `pattern-retrospective/tests/` — 45 tests over both registry fixes, wired into CI.
+
+### Hardened
+
+Found by an adversarial review pass over the fixes above, and worth naming because
+each one could hide an open finding or take down the whole report:
+
+- Closure now requires **both** ends of a `supersedes` link to be well-formed
+  `YYYY-MM-DD-NNN` ids. A corrupt or hand-written row previously hid a genuinely open
+  finding on the strength of a `supersedes` key alone, and one with a non-string
+  `finding_id` crashed the report outright. Rejected links warn on stderr.
+- `follow_up_check.py` tolerates a malformed **field** the way it already tolerated a
+  malformed **line** — a hand-edited `"follow_up_status": 123` used to raise
+  `AttributeError` and take down the whole report (this predates the change above).
+- `--confidence nan` is refused. Every comparison against NaN is false, so it slipped
+  past both the new gate and the schema's min/max, then serialized as bare `NaN`,
+  which is not valid JSON.
+- Duplicate registry paths (`--registries a.jsonl,./a.jsonl`) are read once instead
+  of doubling every row and every count.
+- Both scripts catch `ValueError`, not just `json.JSONDecodeError`, when parsing a
+  registry line. An integer past CPython's 4300-digit conversion limit raises a plain
+  `ValueError`, so one bad line escaped the handler — killing the whole report in
+  `follow_up_check.py`, and replacing `register_finding.py`'s corruption message (which
+  names the recovery script) with a traceback. Also predates this change.
+
+### Changed
+
+- `session-pickup` — never act on a `[derived]` claim without checking it first,
+  above all when it would justify "repairing" something that may be deliberate.
+- `weekly-work-log` — `[derived]` maps to `designed, not proven`, never `shipped`.
+- `requirements-optional.txt` — declares `jsonschema`, which
+  `register_finding.py` has always imported but which was never listed.
+
 ## [2026-07-11] — Cross-runtime skill sync (Claude Code + Codex)
 
 Skills can now deploy to Claude Code, Codex, or both from one shared source. The
