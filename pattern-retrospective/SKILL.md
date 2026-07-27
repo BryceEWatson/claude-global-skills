@@ -258,6 +258,9 @@ When such a substrate lands, a curator-agent + falsifier-agent + provenance-tagg
   stored beside it overstates that evidence to every later reader.
   When the finding resolves or corrects an earlier one, add
   `--supersedes <finding-id>`; that link is what closes the older row.
+  **Commit the registry after registering.** If it is git-tracked, the new row is
+  uncommitted until you do, and a `git restore` or branch switch throws it away
+  without a word. The script prints the exact commit command; run it.
 - **High-stakes retro** (≥5 findings OR conf≥0.70 OR substrate change OR handoff):
   **Requires** `ANTHROPIC_API_KEY` env var. Use `--dry-run-no-api` to smoke-test without calling the API.
   ```bash

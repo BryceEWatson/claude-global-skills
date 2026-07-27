@@ -56,6 +56,16 @@ the opposite of the point.
 corrects an earlier one. That link is what closes the old row (see below); there is
 no in-place status edit.
 
+**Commit the row, or expect to lose it.** The registry is a plain file in the
+project's repo. If it is git-tracked, a freshly-appended finding lives only in the
+working tree, and a `git restore`, branch switch, or stash discards it silently. In a
+repo where several agent worktrees run concurrently that is a matter of hours, not
+theory: two separate retros each lost every finding they registered this way, and the
+`.bak-*` rotation keeps only 3 snapshots, so the evidence window is about three
+appends. `register_finding.py` now detects this and prints a ready-to-run commit
+command after the append. It is a warning, never a gate, and the exit code is
+unchanged.
+
 ### `follow_up_check.py` — at retro start, see what's pending
 
 When to use: first command of any new retro, before mining begins.

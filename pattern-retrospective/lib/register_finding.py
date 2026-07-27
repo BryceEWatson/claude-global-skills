@@ -18,6 +18,7 @@ import json
 import math
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -71,6 +72,65 @@ def smoothed_confidence(supporting: int, contradicting: int) -> float:
     self-contradicting and silently overstates the evidence.
     """
     return supporting / (supporting + contradicting + 2)
+
+
+def _git(args, cwd, timeout=5):
+    """Run a git command, returning (ok, stdout). Never raises."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False, ""
+    return proc.returncode == 0, proc.stdout
+
+
+def warn_if_uncommitted(registry: Path, finding_id: str = "") -> bool:
+    """Warn when the appended row is tracked by git but not yet committed.
+
+    The registry is a plain file inside the project's repo. A `git restore`, a
+    branch switch, or a stash discards uncommitted changes to a TRACKED file, so
+    a freshly-appended finding survives only until someone runs one of those.
+    That is not hypothetical: in a repo running several agent worktrees
+    concurrently, two separate retros each lost every finding they registered,
+    because the rows were written to the working tree and never committed.
+
+    Best-effort and fail-quiet: if git is missing, the path is untracked, or
+    anything errors, say nothing. Returns True when a warning was printed.
+    """
+    parent = registry.parent
+    ok, _ = _git(["rev-parse", "--is-inside-work-tree"], parent)
+    if not ok:
+        return False  # not a git repo -- nothing can revert it
+    tracked, _ = _git(["ls-files", "--error-unmatch", str(registry)], parent)
+    if not tracked:
+        return False  # untracked -- a revert leaves it alone
+    ok, out = _git(["status", "--porcelain", "--", str(registry)], parent)
+    if not ok or not out.strip():
+        return False  # already committed, or git could not tell us
+
+    ok, root_out = _git(["rev-parse", "--show-toplevel"], parent)
+    root = root_out.strip() if ok and root_out.strip() else str(parent)
+    try:
+        rel = registry.resolve().relative_to(Path(root).resolve()).as_posix()
+    except (ValueError, OSError):
+        rel = str(registry)
+    subject = "data(retro): register {}".format(finding_id or "finding")
+
+    print(
+        "warn: {} is tracked by git and this row is NOT committed.\n"
+        "      A `git restore`, branch switch, or stash will silently discard "
+        "it.\n"
+        '      Commit it now:  git -C "{}" add {} && git commit -m "{}"'.format(
+            registry.name, root, rel, subject
+        ),
+        file=sys.stderr,
+    )
+    return True
 
 
 def utc_now_iso() -> str:
@@ -453,6 +513,7 @@ def main(argv):
                         pass
 
             print(finding_id)
+            warn_if_uncommitted(registry, finding_id)
             return EXIT_OK
     except Timeout:
         print(
