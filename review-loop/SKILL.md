@@ -1,16 +1,13 @@
 ---
 name: review-loop
 description: |
-  Dispatches a multi-agent review team over the work in this session,
-  runs an execution-grounded check (lint/test/build), validates findings
-  through a falsifier stage, addresses load-bearing issues, and re-reviews
-  until clean or budget hits. On the terminal verdict, always records a
-  commit-pinned verdict comment on the branch's open PR (if one exists), so
-  the review leaves a trail. Invoked manually as /review-loop or
-  automatically by the Stop hook after real work outside plan mode. Use
-  `--mode claim` to review a non-code analytical conclusion (a research
-  finding or comparison verdict) by sending reviewers back to its primary
-  sources to falsify it.
+  Dispatches a multi-agent review team over this session's work, runs an
+  execution-grounded lint/test/build check, falsifies each finding against the
+  diff, fixes load-bearing issues, and re-reviews until clean or the budget
+  hits. Always records a commit-pinned verdict on the branch's open PR, so the
+  review leaves a trail. Invoked manually or by the Stop hook after real work
+  outside plan mode. `--mode claim` reviews an analytical conclusion against its
+  primary sources instead of a diff.
 allowed-tools: Read, Grep, Glob, Bash, Task, Edit, Write
 ---
 
@@ -259,6 +256,78 @@ check. Findings falsified against the diff; not a human review.
 
 <!-- review-loop:<headRefOid> --> _Re-run after new commits to refresh._
 ```
+
+## Surface the shipping gap — no-PR nudge (ALWAYS, on a terminal verdict)
+
+"Leave a trail on the PR" only fires when a PR **already exists**. The complementary risk — the one that
+bites silently — is a session that did real, reviewable work and then **stopped without shipping it**: the
+change is uncommitted, or committed but never PR'd, or parked on an unrelated branch. This is especially
+common for **spawned background-task ("chip") sessions**, which finish a self-contained unit of work in a
+worktree and have no memory telling them to open a PR. On a terminal verdict, after the PR-trail step, run
+this cheap read-only check and **surface** (never auto-act on) the gap.
+
+1. **Self-gate.** If an open PR for the branch already exists (the trail step posted to it) → skip. If there
+   are no reviewable changes → skip. This no-op is the common case.
+2. **Detect the shape (read-only)** from `git status --porcelain`, `git rev-parse --abbrev-ref HEAD`,
+   `git log @{u}.. 2>/dev/null` (unpushed commits), and the `gh pr view` result already gathered:
+   - **Uncommitted** — the reviewed changes are still in the working tree (dirty `git status`).
+   - **Committed, no PR** — `HEAD` carries the reviewed change but `gh pr view` found no open PR.
+   - **Unrelated branch** — the current branch's name/topic looks unrelated to the reviewed files (a weak
+     heuristic — surface it for the operator to judge, never assert it).
+3. **Surface in the final summary** (one short block, not a wall): name the shape and recommend the next
+   shipping step — e.g. "recommend committing + opening a PR off the default branch", or "branch has commits
+   but no PR — open one?" — and **offer to do it**, confirmation-gated. Creating a branch / commit / PR is an
+   outbound, judgment-laden action: **never auto-commit, auto-push, or auto-open a PR** without an explicit
+   per-instance confirm. Many sessions intentionally leave WIP — this is a **nudge, not a gate**, and it never
+   blocks the terminal exit.
+4. **Docs-staleness one-liner.** If the reviewed diff changed behavior, a flag/CLI surface, an API, or a
+   config field, add one line: "confirm the docs that describe this (README / skill / `docs/`) are updated —
+   this loop reviewed the diff, not whether docs elsewhere went stale." Skip if the diff is doc-only or
+   clearly doc-neutral.
+
+Keep it to a few lines. A reviewed-clean change that never ships is not "done" — the operator should leave
+the session knowing exactly what remains to ship it.
+
+## Reconcile the session's handoff (code mode; only the handoff THIS session wrote)
+
+`session-end` writes a handoff (`<toplevel>/.claude/handoffs/<ts>_<slug>.md`) BEFORE this review runs, so its
+review-status can be stale the instant the verdict lands ("not reviewed yet"), or a load-bearing finding can
+change the risk of its stated next-action. On a **terminal verdict**, reconcile it — run this AFTER "Leave a
+trail on the PR" and BEFORE "State archival", on the still-on-disk state. **Code mode only** (skip in
+plan/claim mode, as claim mode skips the PR trail). Self-gating: most runs wrote no handoff and this no-ops.
+
+1. **Attribute by POSITIVE authorship — never by recency.** Anchor to `git rev-parse --show-toplevel` of the
+   reviewed tree and operate ONLY on `<toplevel>/.claude/handoffs/`. From filenames + `git status` alone (no
+   body reads yet), find the handoff whose FIRST line is `<!-- review-loop:session:<id> -->` with `<id>` equal
+   to THIS run's `--session-id`. If exactly zero match (incl. `unattributed`, or session-end stamped none) OR
+   more than one matches → **skip silently**; this no-op is the expected outcome for most runs. NEVER fall back
+   to "newest by mtime" — concurrent sibling sessions write into the same dir, and editing an unbound handoff
+   corrupts another live session's continuation prompt.
+2. **Idempotency.** If the attributed handoff already carries `<!-- review-loop-reconciled:<diff_sha> -->` for
+   the current reviewed state, skip (already done). Otherwise reconcile and write/replace that single marker in
+   place — never append a second status block.
+3. **Reconcile ONLY what the review changed — surgical, never a rewrite:**
+   - **Correct a now-false review-status line — literal trigger only.** Edit a line ONLY if it literally
+     asserts the work is "unreviewed" / "not yet reviewed" / "untested" / "needs /review-loop" / "review
+     pending" (case-insensitive; this enumerated set, no inference). Replace with per-verdict HONEST wording:
+     clean → "review-loop: clean (`<diff_sha>`)"; exhausted → "review-loop: EXHAUSTED — N unresolved actionable
+     findings (see PR trail)"; stalled → "review-loop: STALLED — no progress, not clean". NEVER write
+     "clean"/"reviewed-OK" on a non-clean verdict. No such literal line → make NO status edit.
+   - **Elevate a load-bearing finding the handoff under-weights — only if it changes the next-action's risk.**
+     Add ONE line to the continuation prompt's next-action or verification-debts, phrased as an OPEN risk, never
+     as resolved: "precondition: review-loop flagged <X> as unresolved (see PR trail) — confirm before
+     <next-action>." Only for a finding already classified load-bearing; non-load-bearing findings never touch
+     the handoff.
+   - **Done-close shape:** if the handoff has no continuation-prompt / next-action / verification-debts section,
+     do NOT inject one — at most fix a literal false status line, else skip. Never fabricate a section the
+     author did not write.
+   - Do not paraphrase, re-voice, or add review jargon to any other line. Cap: ≤2 status edits + ≤1
+     precondition. **Quote each original line you changed** in the final summary.
+4. **Atomic write:** write the full reconciled content to a temp file in the same dir and rename over the
+   original (never a partial in-place stream), so a crash cannot truncate the irreplaceable handoff.
+5. A handoff-only edit is classified nothing-reviewable by the Stop hook's Gate A, so it will not re-arm the
+   loop. (Edge: avoid handoff slugs ending in a plan-glob suffix like `-retrospective` / `-plan` / `-spec`,
+   which would route to plan mode.)
 
 ## State archival
 

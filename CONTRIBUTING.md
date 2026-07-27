@@ -99,6 +99,13 @@ Notes:
 
 - Do **not** run `python scripts/sync.py --check` as a test — it compares against
   a live `~/.claude` tree, which CI and outside contributors don't have.
+- `--capture` (live → repo) runs a **privacy gate** first and refuses the whole
+  skill if the capture would ADD an absolute home path, an email, a session id, a
+  secret-shaped token, or one of your own literal terms. Put private names (client
+  codenames, project aliases) in a gitignored `.capture-private-terms` at the repo
+  root, one per line. Without that file only the generic shapes are checked, so a
+  codename no regex could guess would go through. Nothing is written when the gate
+  refuses; generalize the wording in the LIVE file, then capture again.
 - Python is stdlib-only except three **lazy, conditional** imports. `filelock` and
   `jsonschema` are both used by `global-review-loop/lib/ledger_store.py` and
   `pattern-retrospective/lib/register_finding.py`, but not identically:

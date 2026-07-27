@@ -1,6 +1,6 @@
 ---
 name: session-pickup
-description: Start a continued Claude Code session by safely rehydrating from a prior session's handoff — the inverse of session-end. Finds the latest handoff in .claude/handoffs/, reads it + the docs it points to (tiered, not everything), RECONCILES it against current git/file state to catch anything that drifted since it was written, rebuilds the todo list + the settled constraints + open verification debts, then presents where you are + the immediate next action and confirms before acting. Invoke at the start of a session that continues prior work.
+description: Start a continued Claude Code session by rehydrating from a prior session's handoff, the inverse of session-end. Reads the latest handoff in .claude/handoffs/ and what it points to, reconciles it against current git and file state to catch drift, rebuilds the todo list, settled constraints, and open verification debts, then presents the immediate next action and confirms before acting.
 allowed-tools: Bash, Read, Grep, Glob, TodoWrite
 ---
 
