@@ -14,8 +14,8 @@ All scripts are stdlib-only where possible (`filelock` is the one pinned PyPI de
 
 | Script | One-line purpose |
 |---|---|
-| `register_finding.py` | Append a validated finding row to `<project-root>/reports/_data/retro-findings.jsonl` (atomic, with backup rotation + monotonic `finding_id` per project). |
-| `follow_up_check.py` | Scan a project's pending findings (or `--all` projects via the convention glob); print a markdown table of items still `pending` or past `target_date`. |
+| `register_finding.py` | Append a validated finding row to `<project-root>/reports/_data/retro-findings.jsonl` (atomic, with backup rotation + monotonic `finding_id` per project). Refuses a `--confidence` that contradicts the evidence counts stored beside it. |
+| `follow_up_check.py` | Scan a project's pending findings (or `--all` projects via the convention glob); print a markdown table of items still `pending` or past `target_date`. Findings closed by a `supersedes` link are excluded (and counted). |
 | `repeat_detector.py` | Fuzzy-match a candidate new claim against the registry (`--scope this-project` or `--scope all`); flags near-duplicates ≥0.85, candidates 0.70–0.84, novel <0.70. |
 | `krippendorff_alpha.py` | Pure-function Krippendorff's α computation (stdlib only), with 4 unit tests including a textbook fixture cross-checked once vs k-alpha.org. |
 | `dual_llm_coder.py` | Run two independent Anthropic SDK calls over the same coding prompt + items, compute α, assert request_ids differ, warn if outputs are byte-identical. |
@@ -38,11 +38,23 @@ python ~/.claude/skills/pattern-retrospective/lib/register_finding.py \
     --project myproject \
     --category methodology \
     --claim "Streaming JSONL parse prevents OOM on >100MB session logs." \
-    --confidence 0.72 \
     --evidence-supporting 4 --evidence-contradicting 0 \
     --proposed-action "Document streaming pattern in chat-history-search §4." \
     --target-date 2026-06-30
 ```
+
+**Confidence is derived, not asserted.** `--confidence` is optional; omit it and the
+row stores `supporting / (supporting + contradicting + 2)` (SKILL.md §7), rounded to
+2dp. If you do pass it, it must agree with the counts to within 0.005 or the append
+is refused with exit 5 and a message naming the expected value. The counts and the
+confidence live in the same row, so a disagreement makes the row self-contradicting
+and silently overstates the evidence. Rows written before this gate existed are left
+exactly as they are — the registry is append-only, and a silent rewrite of history is
+the opposite of the point.
+
+**Closing a finding:** pass `--supersedes <finding-id>` on the row that resolves or
+corrects an earlier one. That link is what closes the old row (see below); there is
+no in-place status edit.
 
 ### `follow_up_check.py` — at retro start, see what's pending
 
@@ -54,6 +66,32 @@ python ~/.claude/skills/pattern-retrospective/lib/follow_up_check.py \
 ```
 
 Use `--all` to scan every project under `~/Projects/*/reports/_data/retro-findings.jsonl`.
+
+**Closure is derived from `supersedes`.** The registry is append-only, so a superseded
+row keeps `follow_up_status: pending` forever — nothing goes back and edits it. This
+reader therefore treats "another row in the same registry supersedes me" exactly like
+`follow_up_status: superseded`: the row is not listed and is never counted past-due.
+Without that, every resolved finding is reported as permanently overdue, and a report
+that flags finished work as late is one the reader learns to skip.
+
+Two details worth knowing:
+
+- The suppression is **counted in the summary line**, not silent. `--include-superseded`
+  lists those rows again, marked `(closed: superseded)`; in `--format json` each row
+  carries `closed_by_supersedes`.
+- The supersedes set is scoped **per registry file**. `finding_id`s are date-derived
+  (`YYYY-MM-DD-NNN`) and not project-qualified, so two projects can both hold a
+  `2026-07-03-002`; scoping stops a link in one project from closing a same-numbered
+  finding in another under `--all`.
+- Closure only ever links **two well-formed finding ids**. A corrupt or hand-written
+  row does not get to hide an open finding on the strength of a `supersedes` key
+  alone — it must itself carry a `YYYY-MM-DD-NNN` id, and self-referential links are
+  ignored. Every rejected link warns on stderr; hiding an open finding silently is
+  the same class of defect as the false-overdue this logic exists to fix.
+
+A malformed *field* is tolerated the same way `iter_rows` already tolerates a
+malformed *line* — warn, coerce, keep going. A hand-edited `"follow_up_status": 123`
+used to take down the whole report with an `AttributeError`.
 
 ### `repeat_detector.py` — during mining, check a candidate claim
 
@@ -127,6 +165,18 @@ python ~/.claude/skills/pattern-retrospective/lib/cowork_filter.py \
 
 Pipe into `jq`/`grep` for ad-hoc inventory; the script streams JSONL to stdout (never loads a whole transcript).
 
+## Tests
+
+The registry behaviors above (closure-by-`supersedes`, per-registry scoping, the
+confidence gate, and the append-only guarantee) are covered by:
+
+```bash
+python -m unittest discover -s pattern-retrospective/tests -p 'test_*.py'
+```
+
+Classes that shell out to `register_finding.py` skip when `filelock` / `jsonschema`
+are absent; the rest is stdlib-only. CI installs both.
+
 ## Recovery / repair
 
 - **Junction missing at `<project>/.claude/skills/pattern-retrospective`.** The directory junction that exposes this skill inside a project tree can be deleted by an over-eager cleanup. Recreate it (no admin required for junctions on Windows):
@@ -149,8 +199,8 @@ Pipe into `jq`/`grep` for ad-hoc inventory; the script streams JSONL to stdout (
 
 ## ⚠️ Known fragilities
 
-1. **`follow_up_status` is operator-maintained only.** No automated reminder, no gate. Findings rot in `pending` if not updated. **Mitigation:** future retro-on-retro process; next retro's `follow_up_check.py` surfaces stale items.
+1. **`follow_up_status` is operator-maintained only.** No automated reminder, no gate. Findings rot in `pending` if not updated. **Mitigation:** future retro-on-retro process; next retro's `follow_up_check.py` surfaces stale items. The one status transition that *is* automatic is closure-by-`supersedes`, and it is derived at read time — the stored `follow_up_status` of a superseded row is never updated, so the ledger is not readable standalone on this one axis. Read it with `follow_up_check.py`, not by eye.
 2. **Multi-machine.** If you run retros on multiple machines, project registries diverge UNLESS the project is git-tracked. Since findings live at `<project>/reports/_data/retro-findings.jsonl`, committing the file makes the registry travel with the project.
 3. **`difflib.SequenceMatcher` catches lexical repeats only.** Semantic repeats with different wording will be missed. Verification step 4 tests this; upgrade path: RapidFuzz → embeddings.
-4. **Append-only.** Use `supersedes` or `follow_up_status: cancelled` to retract; never edit a row in place.
+4. **Append-only.** Use `supersedes` or `follow_up_status: cancelled` to retract; never edit a row in place. This is why closure is a read-time derivation rather than a write-back to the superseded row: honoring the invariant is worth more than a self-describing row, and a derivation also closes rows that were already written.
 5. **Cross-project discovery uses convention.** `--scope all` globs `~/Projects/*/reports/_data/retro-findings.jsonl`. Projects outside that path need explicit `--registries path1,path2,...`.

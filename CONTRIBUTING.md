@@ -88,8 +88,10 @@ node --test review-loop/*.test.cjs chat-arch-thrash-detect/*.test.cjs
 # Python (stdlib only)
 python -m unittest discover -s gemini-image/tests -p 'test_*.py'
 python -m unittest discover -s scripts/tests -p 'test_*.py'                 # sync engine
+python -m unittest discover -s session-portal/tests -p 'test_*.py'          # session portal
 python -m unittest discover -s monitor-agent-thread/tests -p 'test_*.py'    # monitor + privacy
 python -m unittest discover -s hooks/tests -p 'test_*.py'                   # drift hook
+python -m unittest discover -s pattern-retrospective/tests -p 'test_*.py'   # findings registry
 python pattern-retrospective/lib/krippendorff_alpha.py --test
 ```
 
@@ -97,12 +99,17 @@ Notes:
 
 - Do **not** run `python scripts/sync.py --check` as a test — it compares against
   a live `~/.claude` tree, which CI and outside contributors don't have.
-- Python is stdlib-only except two **lazy, conditional** imports — `filelock`
-  (in `global-review-loop/.../register_finding.py` and `ledger_store.py`, with a
-  pip-install fallback message) and `anthropic` (in `dual_llm_coder.py`,
-  inter-rater path only). Neither is needed for the test commands above. Keep new
-  code stdlib-only unless you have a strong reason, and gate any new dependency
-  behind a lazy import with a clear fallback.
+- Python is stdlib-only except three **lazy, conditional** imports — `filelock` and
+  `jsonschema` (both in `global-review-loop/lib/ledger_store.py` and
+  `pattern-retrospective/lib/register_finding.py`, each with a pip-install
+  fallback message) and `anthropic` (in `dual_llm_coder.py`, inter-rater path
+  only). Keep new code stdlib-only unless you have a strong reason, and gate any
+  new dependency behind a lazy import with a clear fallback.
+- The commands above stay install-free. The one exception is
+  `pattern-retrospective/tests`, which **skips** the classes that shell out to
+  `register_finding.py` when `filelock` / `jsonschema` are absent (the rest still
+  runs). CI installs both so nothing is skipped there; to match CI locally,
+  `pip install --user -r requirements-optional.txt`.
 
 ## Privacy rule (non-negotiable)
 

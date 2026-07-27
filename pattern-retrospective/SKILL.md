@@ -226,6 +226,10 @@ When such a substrate lands, a curator-agent + falsifier-agent + provenance-tagg
       --project-root <path-to-project>
   ```
   Review pending findings; update `follow_up_status` before proceeding.
+  A finding that a later row **supersedes** is treated as closed and is not
+  listed (the registry is append-only, so the superseded row itself keeps
+  whatever status it was written with). The summary line counts what was hidden;
+  add `--include-superseded` to see those rows.
 - **During mining** for each new finding:
   ```bash
   python ~/.claude/skills/pattern-retrospective/lib/repeat_detector.py \
@@ -242,11 +246,16 @@ When such a substrate lands, a curator-agent + falsifier-agent + provenance-tagg
       --project <slug> \
       --category <tag> \
       --claim "<text>" \
-      --confidence 0.71 \
       --evidence-supporting 5 --evidence-contradicting 0 \
       --proposed-action "<text>" \
       --target-date 2026-06-30
   ```
+  `--confidence` is optional and is best omitted — it is then computed from the
+  counts by the §7 formula. If you pass it, it must agree with the counts or
+  registration is refused: a row whose confidence contradicts the evidence
+  stored beside it overstates that evidence to every later reader.
+  When the finding resolves or corrects an earlier one, add
+  `--supersedes <finding-id>`; that link is what closes the older row.
 - **High-stakes retro** (≥5 findings OR conf≥0.70 OR substrate change OR handoff):
   **Requires** `ANTHROPIC_API_KEY` env var. Use `--dry-run-no-api` to smoke-test without calling the API.
   ```bash

@@ -46,5 +46,9 @@ jobs:
         run: python -m unittest discover -s hooks/tests -p 'test_*.py'
       - name: Run krippendorff_alpha self-test
         run: python pattern-retrospective/lib/krippendorff_alpha.py --test
+      - name: Install optional deps (registry tests exercise the jsonschema + filelock path)
+        run: pip install jsonschema filelock
+      - name: Run pattern-retrospective registry tests
+        run: python -m unittest discover -s pattern-retrospective/tests -p 'test_*.py'
       - name: Compile-check every tracked .py
         run: python -m py_compile $(git ls-files '*.py')
