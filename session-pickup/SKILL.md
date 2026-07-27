@@ -65,6 +65,10 @@ action**. Then:
 - **Read-only to the repo** (+ TodoWrite). Pickup orients; it does not change files or commit.
 - Distinguish **handoff-claims** from **pickup-verified** in your orientation — label what you confirmed
   against current state vs. what you're taking on the handoff's word.
+- **A `[derived]` claim is an inference, not a finding.** `session-end` tags claims it reasoned its way to
+  (vs. `[verified]` ones it observed). Never act on a `[derived]` claim without checking it first —
+  above all when it would justify "repairing" something, because the thing may be deliberate. An
+  *untagged* diagnosis in an older handoff gets the same treatment: verify, don't assume it was measured.
 - A `conflicts` drift finding always halts for the operator — resuming on stale state is the failure mode
   this skill exists to prevent.
 

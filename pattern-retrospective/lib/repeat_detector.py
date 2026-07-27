@@ -72,7 +72,7 @@ def resolve_registries(
 def iter_rows(registry: Path) -> Iterable[dict]:
     """Stream a JSONL registry, yielding parsed rows. Warns and skips malformed lines."""
     try:
-        f = registry.open("r", encoding="utf-8", errors="replace")
+        f = registry.open("r", encoding="utf-8-sig", errors="replace")
     except FileNotFoundError:
         _eprint(f"warning: registry not found: {registry}")
         return
@@ -82,10 +82,19 @@ def iter_rows(registry: Path) -> Iterable[dict]:
             if not stripped:
                 continue
             try:
-                yield json.loads(stripped)
-            except json.JSONDecodeError as exc:
+                row = json.loads(stripped)
+            except ValueError as exc:
+                # ValueError, not JSONDecodeError (which subclasses it): an
+                # integer past CPython's 4300-digit conversion limit raises a
+                # plain ValueError. An unhandled one exits 1, which is this
+                # script's own "REVIEW / candidate" code, so a crash would be
+                # indistinguishable from a verdict to any caller checking status.
                 _eprint(f"warning: malformed JSON at {registry}:{lineno}: {exc}")
                 continue
+            if not isinstance(row, dict):
+                _eprint(f"warning: non-object row at {registry}:{lineno}")
+                continue
+            yield row
 
 
 def score_claim(new_claim: str, existing_claim: str) -> float:

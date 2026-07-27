@@ -9,5 +9,6 @@
 #
 # Loose (>=) pins: no known version constraints — any reasonably recent release works.
 
-filelock>=3.0   # only for per-file locking in global-review-loop/lib/ledger_store.py and pattern-retrospective/lib/register_finding.py
-anthropic>=0.40 # only for the dual-LLM inter-rater path in pattern-retrospective/lib/dual_llm_coder.py
+filelock>=3.0    # only for per-file locking in global-review-loop/lib/ledger_store.py and pattern-retrospective/lib/register_finding.py
+jsonschema>=4.0  # only for row validation in the same two files
+anthropic>=0.40  # only for the dual-LLM inter-rater path in pattern-retrospective/lib/dual_llm_coder.py

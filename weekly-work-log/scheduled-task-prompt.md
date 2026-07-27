@@ -86,7 +86,8 @@ direct control). For each digest session **not already represented** in `source.
   "steer→work→catch" arc is REJECTED — title + summary only.
 - **Status (honest badge):** `shipped` (built + verified), `in progress`, or
   `designed, not proven` (machinery exists, no real result yet). Map a handoff `[verified]`
-  claim → shipped; `[assumed]`/`[unverified]` → designed-not-proven. Mixed session → lead
+  claim → shipped; `[derived]`/`[assumed]`/`[unverified]` → designed-not-proven (a `[derived]`
+  claim is an inference the handoff drew, not a result it observed). Mixed session → lead
   with the **frontier** status (the least-finished, framed as the frontier, never a deficit).
 - **Tier:** `headline` for the few proof-moment / most-significant sessions (full
   badge+summary+detail); `routine` for the rest (compact one-line). Most are routine.
