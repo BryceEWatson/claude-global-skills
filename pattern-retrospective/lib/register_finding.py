@@ -95,9 +95,10 @@ def warn_if_uncommitted(registry: Path, finding_id: str = "") -> bool:
     The registry is a plain file inside the project's repo. A `git restore`, a
     branch switch, or a stash discards uncommitted changes to a TRACKED file, so
     a freshly-appended finding survives only until someone runs one of those.
-    That is not hypothetical: in a repo running several agent worktrees
-    concurrently, two separate retros each lost every finding they registered,
-    because the rows were written to the working tree and never committed.
+    Observed twice in 13 hours in a repo running several agent worktrees: rows
+    were appended, then the file reverted to its committed state. Those rows
+    happened to be recoverable from another branch, which is luck, not a
+    guarantee -- an append that exists nowhere else is gone.
 
     Best-effort and fail-quiet: if git is missing, the path is untracked, or
     anything errors, say nothing. Returns True when a warning was printed.

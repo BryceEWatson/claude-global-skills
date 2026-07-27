@@ -60,9 +60,11 @@ no in-place status edit.
 project's repo. If it is git-tracked, a freshly-appended finding lives only in the
 working tree, and a `git restore`, branch switch, or stash discards it silently. In a
 repo where several agent worktrees run concurrently that is a matter of hours, not
-theory: two separate retros each lost every finding they registered this way, and the
-`.bak-*` rotation keeps only 3 snapshots, so the evidence window is about three
-appends. `register_finding.py` now detects this and prints a ready-to-run commit
+theory: appended rows were observed being reverted twice in one 13-hour window. Those
+particular rows turned out to be recoverable from another branch, but that is luck --
+an append that exists nowhere else is simply gone, and the `.bak-*` rotation keeps
+only 3 snapshots, so the evidence window is about three appends.
+`register_finding.py` now detects this and prints a ready-to-run commit
 command after the append. It is a warning, never a gate, and the exit code is
 unchanged.
 

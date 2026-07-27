@@ -17,11 +17,21 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   switch, or stash discards it with no message. The script now prints a
   ready-to-run `git add && git commit` naming the new finding_id.
 
-  This was found the hard way. In a repo running a dozen-plus concurrent agent
-  worktrees, two separate retrospectives each lost **every** finding they
-  registered, roughly 13 hours apart, both times reverting to the last committed
-  state. Backups rotate at 3, so the snapshot holding the lost rows had already
-  aged out by the time anyone looked.
+  Observed twice inside one 13-hour window, in a repo running a dozen-plus
+  concurrent agent worktrees: rows were appended, then the file reverted to its
+  committed state. Backups rotate at 3, so the evidence window is about three
+  appends.
+
+  **Correction to how this shipped.** The original entry claimed those two
+  retrospectives "lost every finding they registered". That was wrong, and it
+  was an inference stated as a measurement. The findings were already committed
+  to the project's `main` in an earlier PR; the checkout being appended to was on
+  a branch that predated it, so what got reverted were duplicate re-registrations,
+  not unique records. The *mechanism* is real and demonstrable (append to a
+  tracked file, `git restore`, the row is gone), which is what this warning
+  addresses. The incident was not data loss. Diagnosing it from one branch's `git
+  log` without checking `origin/main` is exactly the failure the `[derived]` tag
+  added in the previous release exists to flag.
 
   It is advice, not a gate: the exit code is unchanged, and the check is
   fail-quiet (no git, untracked file, or any error → silent).
