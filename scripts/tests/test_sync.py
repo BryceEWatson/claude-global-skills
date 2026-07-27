@@ -513,6 +513,87 @@ class TestCapture(SyncTestBase):
 # --------------------------------------------------------------------------- #
 # Literal-expansion guard
 # --------------------------------------------------------------------------- #
+class TestCapturePrivacyGate(SyncTestBase):
+    """Capture is the one direction that can leak.
+
+    It pulls the LIVE tree into a PUBLIC repo, and the live tree accumulates
+    operator-private detail the published copy deliberately generalizes. The
+    pre-existing `cruft_scan` runs AFTER the writes land, so by the time it
+    warns, the private content is already in the working tree.
+    """
+
+    def _live_skill(self, body):
+        self.mk_homes()
+        write_skill(self.repo, "s1", shared={"notes.md": "public line\n"})
+        self.run_mode(sync.do_deploy, "claude", None)
+        (self.claude / "s1" / "notes.md").write_text(body, encoding="utf-8")
+
+    def _repo_notes(self):
+        return (self.repo / "s1" / "notes.md").read_text(encoding="utf-8")
+
+    def test_refuses_before_writing_on_an_absolute_home_path(self):
+        self._live_skill("public line\nsee C:/Users/someone/Projects/Other/plan.md\n")
+        code, out, err = self.run_mode(sync.do_capture, "claude", None)
+        self.assertEqual(code, sync.EXIT_ERROR)
+        self.assertIn("private content", out + err)
+        self.assertNotIn("Projects/Other", self._repo_notes(),
+                         "must refuse BEFORE writing, not warn after")
+
+    def test_refuses_on_an_email_address(self):
+        self._live_skill("public line\ncontact someone@example.com\n")
+        code, out, err = self.run_mode(sync.do_capture, "claude", None)
+        self.assertEqual(code, sync.EXIT_ERROR)
+        self.assertNotIn("example.com", self._repo_notes())
+
+    def test_refuses_on_a_session_uuid(self):
+        self._live_skill("public line\nsession 00000000-0000-4000-8000-000000000000\n")
+        code, _, _ = self.run_mode(sync.do_capture, "claude", None)
+        self.assertEqual(code, sync.EXIT_ERROR)
+
+    def test_operator_terms_block_a_codename_no_regex_could_know(self):
+        (self.repo / sync.PRIVATE_TERMS_FILE).write_text(
+            "# one term per line\nAcmeCorp\n", encoding="utf-8")
+        self._live_skill("public line\nthe AcmeCorp retro found three issues\n")
+        code, out, err = self.run_mode(sync.do_capture, "claude", None)
+        self.assertEqual(code, sync.EXIT_ERROR)
+        self.assertIn("private term", out + err)
+        self.assertNotIn("AcmeCorp", self._repo_notes())
+
+    def test_operator_terms_match_case_insensitively(self):
+        """The first version of this gate matched `AcmeCorp` but missed `Acmecorp`."""
+        (self.repo / sync.PRIVATE_TERMS_FILE).write_text("AcmeCorp\n", encoding="utf-8")
+        self._live_skill("public line\nlowercase acmecorp slipped through\n")
+        code, _, _ = self.run_mode(sync.do_capture, "claude", None)
+        self.assertEqual(code, sync.EXIT_ERROR)
+
+    def test_terms_file_comments_and_blanks_ignored(self):
+        (self.repo / sync.PRIVATE_TERMS_FILE).write_text(
+            "\n# a comment\n\nAcmeCorp\n", encoding="utf-8")
+        terms = sync.load_private_terms(self.repo)
+        self.assertEqual(terms, ["AcmeCorp"])
+
+    def test_missing_terms_file_is_not_an_error(self):
+        self.assertEqual(sync.load_private_terms(self.repo), [])
+
+    def test_clean_capture_still_succeeds(self):
+        self._live_skill("public line\na perfectly ordinary added line\n")
+        code, out, _ = self.run_mode(sync.do_capture, "claude", None)
+        self.assertEqual(code, sync.EXIT_OK, out)
+        self.assertIn("a perfectly ordinary added line", self._repo_notes())
+
+    def test_a_term_already_in_the_repo_copy_is_sanctioned(self):
+        """weekly-work-log legitimately names the codenames it redacts."""
+        self.mk_homes()
+        write_skill(self.repo, "s1", shared={"notes.md": "redact AcmeCorp from output\n"})
+        self.run_mode(sync.do_deploy, "claude", None)
+        (self.repo / sync.PRIVATE_TERMS_FILE).write_text("AcmeCorp\n", encoding="utf-8")
+        live = self.claude / "s1" / "notes.md"
+        live.write_text(live.read_text() + "an unrelated new line\n", encoding="utf-8")
+        code, out, _ = self.run_mode(sync.do_capture, "claude", None)
+        self.assertEqual(code, sync.EXIT_OK, out)
+        self.assertIn("an unrelated new line", self._repo_notes())
+
+
 class TestLiteralExpansion(SyncTestBase):
     def test_literal_expansion_warns_on_check_and_refuses_capture(self):
         self.mk_homes()

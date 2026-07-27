@@ -11,6 +11,33 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Added
 
+- **`sync.py --capture` now refuses to pull private content into the repo.**
+  Capture is the one direction that can leak: it copies the live tree into a
+  public repo, and the live tree accumulates operator-private detail (absolute
+  home paths, emails, session ids, client codenames) that the published copy
+  deliberately generalizes. The existing `cruft_scan` only *warned*, and only
+  *after* the writes had landed, so by the time it spoke the private content was
+  already in the working tree.
+
+  Lines that capture would ADD are now scanned **before anything is written**, and
+  the whole skill is refused on a match. Generic shapes are built in; literal names
+  live in a gitignored `.capture-private-terms` at the repo root (one per line,
+  case-insensitive), because listing them in tracked source would publish the very
+  names the gate withholds. A term already present in the repo's copy of a file is
+  sanctioned, so a skill that legitimately names the terms it redacts is unaffected.
+
+  Checked against the live tree: 9 of 26 drifting files would have leaked, across
+  6 skills. All 6 are now refused.
+
+- **Captured live-only improvements that existed on one machine only** —
+  `review-loop` gains its "surface the shipping gap" and "reconcile the session's
+  handoff" sections (72 lines the repo never had, both load-bearing), and
+  `session-end` gains the handoff provenance-marker stamp that `/review-loop`'s
+  reconciliation step keys on. `session-pickup`, `seo-index-validation` and
+  `session-end` also pick up tightened descriptions. Captured file-by-file rather
+  than by `--capture`, because the same skills carry redactions that must not
+  travel back.
+
 - **`register_finding.py` warns when the row it just wrote is uncommitted.** The
   registry is a plain file in the project's repo. If git tracks it, a freshly
   appended finding lives only in the working tree, and a `git restore`, branch

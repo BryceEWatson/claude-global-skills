@@ -23,9 +23,22 @@ Modes:
               clobbers a live .local-state/; only touches <home>/<skill>/, so sibling
               and unrelated installed skills (and other product homes) are untouched.
   --capture   Reverse-map ONE target's live copy -> repo (requires --target). Refuses
-              on divergence or on an unclassifiable live file; writes file-by-file
-              (never wipes the skill dir), leaving other targets' overlays untouched.
-              Does NOT touch git — staging/commit/PR stays operator-driven.
+              on divergence, on an unclassifiable live file, or when the capture
+              would ADD private content to the repo (see the privacy gate below);
+              writes file-by-file (never wipes the skill dir), leaving other
+              targets' overlays untouched. Does NOT touch git — staging/commit/PR
+              stays operator-driven.
+
+Capture privacy gate: capture is the ONE direction that can leak, because it pulls
+the live tree into a public repo, and the live tree accumulates operator-private
+detail (absolute home paths, emails, session ids, client codenames) that the
+published copy deliberately generalizes. Lines that capture would ADD are scanned
+before anything is written, and the whole skill is refused if any match. Generic
+shapes are built in; literal names live in a gitignored `.capture-private-terms` at
+the repo root (one per line, case-insensitive substrings), because listing them in
+tracked source would publish the very names the gate withholds. A term already
+present in the repo's copy of a file is sanctioned, so a skill that legitimately
+names the terms it redacts does not trip the gate.
 
 Default target set (--check / --deploy, no --target): each skill's declared targets
 whose live home directory already exists. This is symmetric across check and deploy
@@ -584,6 +597,84 @@ def _reverse_shared_image(skill_dir: Path, target: str, live_dir: Path) -> dict[
     return img
 
 
+# Capture pulls the LIVE copy back into a PUBLIC repo, so it is the one direction
+# that can leak. The live tree accumulates operator-private detail (real client
+# codenames, absolute home paths, session ids) that the published copy deliberately
+# generalizes; without this gate a single `--capture` silently republishes all of it.
+PRIVATE_PATTERNS = [
+    (re.compile(r"[a-z]:[\\/]users[\\/][a-z0-9._-]+", re.I), "absolute home path"),
+    (re.compile(r"/home/[a-z0-9._-]+/|/mnt/c/users/[a-z0-9._-]+", re.I), "absolute home path"),
+    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.]{2,}"), "email address"),
+    (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I), "session uuid"),
+    (re.compile(r"sk-ant-|ghp_|github_pat_|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY"), "secret-shaped"),
+]
+
+
+PRIVATE_TERMS_FILE = ".capture-private-terms"
+
+
+def load_private_terms(root: Path):
+    """Operator-supplied literal terms that must never enter the repo.
+
+    One term per line in a gitignored `.capture-private-terms` at the repo root;
+    `#` comments and blanks ignored; matched case-insensitively as substrings.
+    This is where client codenames and project aliases belong -- listing them in
+    the tracked source would publish the very names the gate exists to withhold,
+    and one operator's private terms are not another's.
+    """
+    path = root / PRIVATE_TERMS_FILE
+    if not path.exists():
+        return []
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    terms = []
+    for line in raw.replace("\r\n", "\n").split("\n"):
+        line = line.strip()
+        if line and not line.startswith("#"):
+            terms.append(line)
+    return terms
+
+
+def _new_private_lines(dest: Path, new_bytes: bytes, terms=()):
+    """Private-looking lines that capture would ADD to `dest`.
+
+    Only NEW lines are scanned. A token already present in the repo copy is
+    sanctioned by definition -- `weekly-work-log` legitimately names the client
+    codenames it redacts, and re-flagging those would make the gate unusable.
+    Returns [(label, matched_text, line), ...].
+    """
+    try:
+        old = dest.read_text(encoding="utf-8", errors="replace") if dest.exists() else ""
+    except OSError:
+        old = ""
+    already = set(old.replace("\r\n", "\n").split("\n"))
+    text = new_bytes.decode("utf-8", errors="replace").replace("\r\n", "\n")
+
+    lowered_terms = [(t, t.lower()) for t in terms]
+
+    found = []
+    for line in text.split("\n"):
+        if line in already:
+            continue
+        hit = None
+        for rx, label in PRIVATE_PATTERNS:
+            m = rx.search(line)
+            if m:
+                hit = (label, m.group(0))
+                break
+        if hit is None:
+            low = line.lower()
+            for original, needle in lowered_terms:
+                if needle in low:
+                    hit = ("private term", original)
+                    break
+        if hit is not None:
+            found.append((hit[0], hit[1], line.strip()[:100]))
+    return found
+
+
 def _capture_existing(name, skill_dir, target, live_dir):
     """Returns (ok, message, changed_files). Enforces the divergence guard, then
     classifies each live file to shared/ or overlays/<target>/ (refuse if neither)."""
@@ -636,6 +727,21 @@ def _capture_existing(name, skill_dir, target, live_dir):
                 f"{name}: unclassifiable live file(s) {unclassifiable[:6]} — not in "
                 f"shared content or overlays/{target}/. Place them explicitly in the "
                 f"repo (shared vs overlays/<target>/) before capturing.",
+                [])
+
+    terms = load_private_terms(repo_root())
+    leaks = []
+    for dest, data in writes:
+        for label, matched, line in _new_private_lines(dest, data, terms):
+            leaks.append(f"    {dest.name} [{label}] {matched!r} in: {line}")
+    if leaks:
+        shown = "\n".join(leaks[:8])
+        more = f"\n    ... and {len(leaks) - 8} more" if len(leaks) > 8 else ""
+        return (False,
+                f"{name}: capture would ADD private content to this repo:\n{shown}{more}\n"
+                f"  The live copy keeps operator-private detail the published copy "
+                f"generalizes. Generalize these lines in the LIVE file first, then "
+                f"re-run --capture. Nothing was written.",
                 [])
 
     # Deletions: a repo file that belongs to THIS target's materialized set (shared

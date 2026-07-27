@@ -1,6 +1,6 @@
 ---
 name: session-end
-description: End / close out the current Claude Code session — produce an evidence-grounded record of what happened (key decisions + rationale, claims tagged with their provenance so an inference never reads as a measurement, load-bearing assumptions, artifacts created/changed, reversals). When work is mid-flight it ALSO hands off: captures the exact resumable state and emits a ready-to-paste continuation prompt for a fresh session. Invoke whenever you're wrapping up a session — whether the work is DONE or you're passing the baton (context filling up, switching tasks). Formerly "session-handoff"; handoff is now the mid-flight mode. Triggers: end / wrap up / close out / hand off this session.
+description: End or close out the current Claude Code session, producing an evidence-grounded record of what happened: decisions and rationale, claims and their verification status, load-bearing assumptions, artifacts changed, reversals. When work is mid-flight it also hands off, emitting a ready-to-paste continuation prompt for a fresh session. Formerly "session-handoff"; handoff is now its mid-flight mode.
 allowed-tools: Bash, Read, Grep, Glob, Write, TodoWrite
 ---
 
@@ -92,16 +92,25 @@ If a task was underway when handoff was invoked, capture the exact resumable sta
 
 Everything here is load-bearing by construction — it exists precisely so the next session acts on it
 without re-deriving it. So **tag it** (`[verified]` / `[derived]` / `[unverified]` / `[assumed]`) or
-state the evidence inline. Be strictest about any claim that would justify *changing* something: "this looks wrong / is the
-cause / should be repaired" is a `[derived]` claim until you have read the thing and can say why it is
-that way. If it might be deliberate, say so — that sentence is what stops the next session from
-"fixing" a safety property.
+state the evidence inline. Be strictest about any claim that would justify *changing* something: "this
+looks wrong / is the cause / should be repaired" is a `[derived]` claim until you have read the thing
+and can say why it is that way. If it might be deliberate, say so — that sentence is what stops the
+next session from "fixing" a safety property.
 
 ## Step 4 — Write the handoff to disk (durable + machine-readable)
 
 Write the full summary to a file so the next session can READ it rather than trust pasted prose:
 `<project-root>/.claude/handoffs/<UTC-timestamp>_<slug>.md` (create the dir; it's additive/safe).
 If not in a writable repo, skip and emit in-chat only. Never commit, never modify other files.
+
+**Stamp a provenance marker as the very FIRST line of the handoff file** (before the H1), so a later automated
+review can identify the handoff THIS session wrote and never a concurrent sibling session's:
+`<!-- review-loop:session:<session-id> -->`. `<session-id>` is the current Claude Code session id (the UUID for
+this session — e.g. the active transcript's id for this cwd, or a `--session-id` value surfaced in this
+session). If you cannot determine it with confidence, write `<!-- review-loop:session:unattributed -->` — the
+review will then safely SKIP reconciling this handoff rather than risk editing the wrong one. (HTML comments
+are invisible in rendered markdown.) This is the only hook the `/review-loop` "Reconcile the session's handoff"
+step keys on.
 
 ## Step 5 — Emit the continuation prompt (ONLY if work is mid-flight)
 

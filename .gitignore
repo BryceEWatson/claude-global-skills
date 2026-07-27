@@ -18,3 +18,8 @@ __pycache__/
 
 # pytest cache (defense-in-depth; don't rely on pytest's own inner .gitignore)
 .pytest_cache/
+
+# Operator-supplied literal terms that --capture must never pull into the repo
+# (client codenames, project aliases). Local-only by design: listing them in
+# tracked source would publish the names the gate exists to withhold.
+.capture-private-terms
