@@ -99,11 +99,12 @@ Notes:
 
 - Do **not** run `python scripts/sync.py --check` as a test — it compares against
   a live `~/.claude` tree, which CI and outside contributors don't have.
-- Python is stdlib-only except three **lazy, conditional** imports — `filelock` and
-  `jsonschema` (both in `global-review-loop/lib/ledger_store.py` and
-  `pattern-retrospective/lib/register_finding.py`, each with a pip-install
-  fallback message) and `anthropic` (in `dual_llm_coder.py`, inter-rater path
-  only). Keep new code stdlib-only unless you have a strong reason, and gate any
+- Python is stdlib-only except three **lazy, conditional** imports. `filelock` and
+  `jsonschema` are both used by `global-review-loop/lib/ledger_store.py` and
+  `pattern-retrospective/lib/register_finding.py`, but not identically:
+  `register_finding.py` exits 3 with a `pip install` message without either, while
+  `ledger_store.py` falls back to an equivalent manual schema check. `anthropic` is
+  in `dual_llm_coder.py`, inter-rater path only. Keep new code stdlib-only unless you have a strong reason, and gate any
   new dependency behind a lazy import with a clear fallback.
 - The commands above stay install-free. The one exception is
   `pattern-retrospective/tests`, which **skips** the classes that shell out to

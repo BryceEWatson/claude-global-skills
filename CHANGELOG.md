@@ -49,13 +49,37 @@ misrepresent itself to whoever read it next.
   own changes. The rule covers diagnoses and mechanisms, not just numbers, and applies
   hardest to the mid-flight block and the continuation prompt, where claims travel
   furthest from their evidence.
-- `pattern-retrospective/tests/` — 45 tests over both registry fixes, wired into CI.
+- `pattern-retrospective/tests/` — 64 tests over both registry fixes, wired into CI.
 
 ### Hardened
 
-Found by an adversarial review pass over the fixes above, and worth naming because
-each one could hide an open finding or take down the whole report:
+Found by adversarial review passes over the fixes above, and worth naming because
+each one could hide an open finding or take down the whole report. **Hiding an open
+finding is the worst thing this reader can do**, so every one of these now fails open
+and warns on stderr rather than dropping a row quietly:
 
+- **An unrecognized `follow_up_status` made a genuinely open finding vanish** with no
+  warning and no count. The keep-gate was an allow-list of `pending` / `in-progress`,
+  so a typo (`in_progress`), a different case (`Pending`), an empty value, a missing
+  key, or a hand-edited non-string all dropped the row. It is now a deny-list: only
+  the four terminal statuses close a finding, and **unknown means open**. The
+  non-string case was a regression introduced by the field-coercion below, which
+  turned a loud crash into a silent hide.
+- **Two findings that supersede each other closed each other,** so both vanished and
+  no successor survived. The self-reference guard only caught 1-cycles. Cycles of any
+  length are now detected; their links are dropped so nothing is hidden.
+- **A UTF-8 BOM dropped the registry's first row** (and made `register_finding.py`
+  refuse every future append as corruption). `U+FEFF` is not whitespace, so `strip()`
+  never removed it. All three readers now open with `utf-8-sig`. Windows PowerShell
+  5.1 writes UTF-8 with a BOM, so this was reachable by ordinary local editing.
+- **`repeat_detector.py` was left out of the hardening** while the other two readers
+  got it, so the same corrupt row still killed it — and its crash exit code (1) is
+  its own documented "REVIEW / candidate" verdict, making a crash indistinguishable
+  from a result. It now shares the same warn-and-continue behavior.
+- **A supplied `--confidence` that passed the check was stored verbatim,** so a
+  hand-picked 0.755 landed beside counts worth 0.75, at a precision the formula never
+  produces. `--confidence` is now purely an assertion to check; the derived value is
+  what gets stored.
 - Closure now requires **both** ends of a `supersedes` link to be well-formed
   `YYYY-MM-DD-NNN` ids. A corrupt or hand-written row previously hid a genuinely open
   finding on the strength of a `supersedes` key alone, and one with a non-string
@@ -68,11 +92,11 @@ each one could hide an open finding or take down the whole report:
   which is not valid JSON.
 - Duplicate registry paths (`--registries a.jsonl,./a.jsonl`) are read once instead
   of doubling every row and every count.
-- Both scripts catch `ValueError`, not just `json.JSONDecodeError`, when parsing a
-  registry line. An integer past CPython's 4300-digit conversion limit raises a plain
-  `ValueError`, so one bad line escaped the handler — killing the whole report in
-  `follow_up_check.py`, and replacing `register_finding.py`'s corruption message (which
-  names the recovery script) with a traceback. Also predates this change.
+- All three registry readers catch `ValueError`, not just `json.JSONDecodeError`. An
+  integer past CPython's 4300-digit conversion limit raises a plain `ValueError`, so
+  one bad line escaped the handler — killing the whole report in `follow_up_check.py`,
+  and replacing `register_finding.py`'s corruption message (which names the recovery
+  script) with a traceback. Also predates this change.
 
 ### Changed
 

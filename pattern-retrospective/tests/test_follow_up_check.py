@@ -10,6 +10,7 @@ late trains the reader to ignore it.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -323,7 +324,9 @@ class TestMalformedInput(unittest.TestCase):
             )
             listed, suppressed = run([reg], "2026-07-27")
         self.assertEqual(suppressed, 0)
-        self.assertEqual(len(listed), 2)
+        # The row with the broken id is warned about, not listed; the row that
+        # tried to supersede it is a real finding and stays open.
+        self.assertEqual(listed, ["2026-02-01-001"])
 
     def test_null_supersedes_is_ignored(self):
         with tempfile.TemporaryDirectory() as d:
@@ -385,6 +388,125 @@ class TestMalformedFieldTypes(unittest.TestCase):
         self.assertIn("2026-01-01-001", md)
 
 
+class TestUnknownStatusIsOpen(unittest.TestCase):
+    """An unrecognized status must never be quieter than a recognized-open one.
+
+    The allow-list this replaced kept only {pending, in-progress}, so a typo, a
+    capitalization, an empty value or a hand-edited non-string made a genuinely
+    open finding vanish with no warning and no suppressed count -- worse than the
+    supersedes suppression this file is careful to count.
+    """
+
+    def _listed_with_status(self, status):
+        with tempfile.TemporaryDirectory() as d:
+            r = row("2026-07-01-001", "pending", "2026-12-31")
+            r["follow_up_status"] = status
+            reg = write_registry(d, [r])
+            return run([reg], "2026-07-27")[0]
+
+    def test_typo_status_is_still_listed(self):
+        self.assertEqual(self._listed_with_status("in_progress"), ["2026-07-01-001"])
+
+    def test_wrong_case_status_is_still_listed(self):
+        self.assertEqual(self._listed_with_status("Pending"), ["2026-07-01-001"])
+
+    def test_empty_status_is_still_listed(self):
+        self.assertEqual(self._listed_with_status(""), ["2026-07-01-001"])
+
+    def test_non_string_status_is_still_listed(self):
+        """Coercing this to a string must not turn a loud crash into a silent hide."""
+        self.assertEqual(self._listed_with_status(123), ["2026-07-01-001"])
+
+    def test_missing_status_key_is_still_listed(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = row("2026-07-01-001", "pending", "2026-12-31")
+            del r["follow_up_status"]
+            reg = write_registry(d, [r])
+            listed, _ = run([reg], "2026-07-27")
+        self.assertEqual(listed, ["2026-07-01-001"])
+
+    def test_terminal_statuses_still_close(self):
+        """The deny-list must not accidentally surface genuinely closed work."""
+        for status in ("abandoned", "superseded", "cancelled", "shipped"):
+            with self.subTest(status=status):
+                self.assertEqual(self._listed_with_status(status), [])
+
+    def test_shipped_still_honors_include_shipped(self):
+        with tempfile.TemporaryDirectory() as d:
+            reg = write_registry(d, [row("2026-07-01-001", "shipped", "2026-12-31")])
+            listed, _ = run([reg], "2026-07-27", include_shipped=True)
+        self.assertEqual(listed, ["2026-07-01-001"])
+
+
+class TestSupersedesCycles(unittest.TestCase):
+    """A cycle has no surviving successor, so honoring its links hides everything."""
+
+    def test_mutual_supersedes_hides_neither(self):
+        with tempfile.TemporaryDirectory() as d:
+            reg = write_registry(
+                d,
+                [
+                    row("2026-07-01-001", "pending", "2026-12-31", supersedes="2026-07-01-002"),
+                    row("2026-07-01-002", "pending", "2026-12-31", supersedes="2026-07-01-001"),
+                ],
+            )
+            listed, suppressed = run([reg], "2026-07-27")
+        self.assertEqual(sorted(listed), ["2026-07-01-001", "2026-07-01-002"])
+        self.assertEqual(suppressed, 0)
+
+    def test_three_node_cycle_hides_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            reg = write_registry(
+                d,
+                [
+                    row("2026-07-01-001", "pending", "2026-12-31", supersedes="2026-07-01-002"),
+                    row("2026-07-01-002", "pending", "2026-12-31", supersedes="2026-07-01-003"),
+                    row("2026-07-01-003", "pending", "2026-12-31", supersedes="2026-07-01-001"),
+                ],
+            )
+            listed, suppressed = run([reg], "2026-07-27")
+        self.assertEqual(len(listed), 3)
+        self.assertEqual(suppressed, 0)
+
+    def test_a_clean_chain_into_a_cycle_still_closes_normally(self):
+        """Only links ON the cycle are dropped; a legitimate successor still closes."""
+        with tempfile.TemporaryDirectory() as d:
+            reg = write_registry(
+                d,
+                [
+                    row("2026-01-01-001", "pending", "2026-12-31", supersedes="2026-07-01-002"),
+                    row("2026-07-01-002", "pending", "2026-12-31", supersedes="2026-07-01-003"),
+                    row("2026-07-01-003", "pending", "2026-12-31", supersedes="2026-07-01-002"),
+                ],
+            )
+            listed, suppressed = run([reg], "2026-07-27")
+        self.assertNotIn("2026-07-01-002", listed, "closed by the off-cycle row")
+        self.assertIn("2026-01-01-001", listed)
+        self.assertIn("2026-07-01-003", listed, "cycle members must not vanish")
+
+    def test_cycle_detector_on_plain_graphs(self):
+        self.assertEqual(fuc.ids_on_supersedes_cycles({"a": {"b"}, "b": {"c"}}), set())
+        self.assertEqual(fuc.ids_on_supersedes_cycles({"a": {"b"}, "b": {"a"}}), {"a", "b"})
+        self.assertEqual(fuc.ids_on_supersedes_cycles({}), set())
+
+
+class TestByteOrderMark(unittest.TestCase):
+    """PowerShell 5.1 writes UTF-8 with a BOM; U+FEFF is not whitespace."""
+
+    def test_bom_does_not_drop_the_first_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            reg = write_registry(
+                d,
+                [
+                    row("2026-07-01-001", "pending", "2026-12-31"),
+                    row("2026-07-01-002", "pending", "2026-12-31"),
+                ],
+            )
+            reg.write_bytes(b"\xef\xbb\xbf" + reg.read_bytes())
+            listed, _ = run([reg], "2026-07-27")
+        self.assertEqual(sorted(listed), ["2026-07-01-001", "2026-07-01-002"])
+
+
 class TestUnparseableLines(unittest.TestCase):
     def _listed(self, extra_lines):
         with tempfile.TemporaryDirectory() as d:
@@ -435,6 +557,85 @@ class TestRendering(unittest.TestCase):
         parsed = json.loads(fuc.render_json([r]))
         self.assertTrue(parsed[0]["closed_by_supersedes"])
         self.assertEqual(parsed[0]["days_overdue"], 0)
+
+
+class TestCommandLine(unittest.TestCase):
+    """main() itself. Without this, a regression that passed suppressed=0 into
+    render_markdown would restore silent suppression with every unit test green.
+    """
+
+    SCRIPT = LIB / "follow_up_check.py"
+
+    def _run(self, reg, *extra):
+        return subprocess.run(
+            [sys.executable, str(self.SCRIPT), "--registries", str(reg),
+             "--asof", "2026-07-27", *extra],
+            capture_output=True, text=True,
+        )
+
+    def _registry(self, d):
+        return write_registry(
+            d,
+            [
+                row("2026-06-02-001", "pending", "2026-06-30"),
+                row("2026-07-03-001", "pending", "2026-12-31", supersedes="2026-06-02-001"),
+            ],
+        )
+
+    def test_markdown_reports_the_suppression(self):
+        with tempfile.TemporaryDirectory() as d:
+            res = self._run(self._registry(d))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("1 row(s) closed by a supersedes link", res.stdout)
+        self.assertIn("2026-07-03-001", res.stdout)
+        self.assertNotIn("2026-06-02-001", res.stdout)
+
+    def test_json_emits_the_note_on_stderr_and_keeps_a_pure_array(self):
+        with tempfile.TemporaryDirectory() as d:
+            res = self._run(self._registry(d), "--format", "json")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("closed by a supersedes link", res.stderr)
+        parsed = json.loads(res.stdout)
+        self.assertEqual([r["finding_id"] for r in parsed], ["2026-07-03-001"])
+        self.assertFalse(parsed[0]["closed_by_supersedes"])
+
+    def test_include_superseded_does_not_tell_you_to_pass_the_flag_you_passed(self):
+        with tempfile.TemporaryDirectory() as d:
+            res = self._run(self._registry(d), "--include-superseded")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("2026-06-02-001", res.stdout)
+        self.assertNotIn("re-run with --include-superseded", res.stdout)
+        self.assertIn("shown only because --include-superseded", res.stdout)
+
+    def test_unknown_status_warns_on_stderr(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = row("2026-07-01-001", "pending", "2026-12-31")
+            r["follow_up_status"] = "in_progress"
+            res = self._run(write_registry(d, [r]))
+        self.assertIn("treated as OPEN and listed", res.stderr)
+        self.assertIn("2026-07-01-001", res.stdout)
+
+    def test_cycle_warns_on_stderr(self):
+        with tempfile.TemporaryDirectory() as d:
+            reg = write_registry(
+                d,
+                [
+                    row("2026-07-01-001", "pending", "2026-12-31", supersedes="2026-07-01-002"),
+                    row("2026-07-01-002", "pending", "2026-12-31", supersedes="2026-07-01-001"),
+                ],
+            )
+            res = self._run(reg)
+        self.assertIn("supersedes cycle", res.stderr)
+        self.assertIn("2026-07-01-001", res.stdout)
+        self.assertIn("2026-07-01-002", res.stdout)
+
+    def test_exits_zero_even_on_a_corrupt_registry(self):
+        """It is a report, not a gate."""
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "retro-findings.jsonl"
+            path.write_text("{not json\n[1,2,3]\n", encoding="utf-8")
+            res = self._run(path)
+        self.assertEqual(res.returncode, 0, res.stderr)
 
 
 if __name__ == "__main__":

@@ -49,6 +49,10 @@ jobs:
       - name: Install optional deps (registry tests exercise the jsonschema + filelock path)
         run: pip install jsonschema filelock
       - name: Run pattern-retrospective registry tests
+        env:
+          # Fail loudly if the deps above are missing, rather than silently
+          # skipping the tests that shell out to register_finding.py.
+          REQUIRE_OPTIONAL_DEPS: "1"
         run: python -m unittest discover -s pattern-retrospective/tests -p 'test_*.py'
       - name: Compile-check every tracked .py
         run: python -m py_compile $(git ls-files '*.py')

@@ -25,13 +25,13 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SCHEMA_PATH = SCRIPT_DIR / "_schema.json"
-FINDING_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{3}$")
+FINDING_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{3}$", re.ASCII)
 
 # A stored confidence must agree with the evidence counts stored beside it.
 # Tolerance is half of the last stored decimal place, i.e. a caller who rounds
 # the formula to 2dp agrees; anyone who picked a number by feel does not.
 CONFIDENCE_DECIMALS = 2
-CONFIDENCE_TOLERANCE = 0.005
+CONFIDENCE_TOLERANCE = 0.5 * 10 ** -CONFIDENCE_DECIMALS
 
 EXIT_OK = 0
 EXIT_GENERAL = 1
@@ -55,11 +55,17 @@ def find_project_root_from_cwd() -> Path:
 
 
 def smoothed_confidence(supporting: int, contradicting: int) -> float:
-    """Bayesian-smoothed confidence, per SKILL.md §7.
+    """The smoothed confidence score defined in SKILL.md §7.
 
     confidence = supporting / (supporting + contradicting + 2)
 
-    The +2 prior is what stops a single observation reading as "always".
+    Two pseudo-observations are added to the DENOMINATOR only, so the score sits
+    deliberately below the raw success rate and can never reach 1. That is what
+    stops a single observation reading as "always". Note this is a pessimistic
+    shrinkage estimate, not a Beta posterior mean: the Laplace form would be
+    `(s + 1) / (s + c + 2)`, which gives 0.875 at 6/0 where this gives 0.75.
+    Calling it "Bayesian" would borrow authority the estimator has not earned.
+
     Callers must not hand-pick a number that disagrees with this: the counts and
     the confidence are stored in the same row, so a disagreement makes the row
     self-contradicting and silently overstates the evidence.
@@ -113,7 +119,7 @@ def read_existing_streaming(path: Path, project_root: Path | None = None):
     ids = []
     if not path.exists():
         return raw_lines, ids
-    with path.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8-sig") as fh:
         for lineno, line in enumerate(fh, start=1):
             stripped = line.rstrip("\n").rstrip("\r")
             if not stripped.strip():
@@ -262,6 +268,14 @@ def main(argv):
         )
         return EXIT_ARGS
 
+    if args.evidence_supporting == 0:
+        print(
+            "warn: --evidence-supporting is 0, so the stored confidence is 0.0. "
+            "That is indistinguishable from evidence that refutes the claim; "
+            "consider whether this finding is worth registering.",
+            file=sys.stderr,
+        )
+
     expected_confidence = smoothed_confidence(
         args.evidence_supporting, args.evidence_contradicting
     )
@@ -300,7 +314,12 @@ def main(argv):
                 file=sys.stderr,
             )
             return EXIT_ARGS
-        confidence_value = args.confidence
+        # Store the DERIVED value, not the caller's. A value that merely passed
+        # the tolerance check is still hand-picked, and storing it at a
+        # precision the formula never produces (0.755 beside counts worth 0.75)
+        # leaves the row self-inconsistent at exactly the precision a reader
+        # sees. `--confidence` is an assertion to check, not a value to keep.
+        confidence_value = round(expected_confidence, CONFIDENCE_DECIMALS)
 
     try:
         from jsonschema import Draft7Validator

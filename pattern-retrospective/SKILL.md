@@ -229,7 +229,9 @@ When such a substrate lands, a curator-agent + falsifier-agent + provenance-tagg
   A finding that a later row **supersedes** is treated as closed and is not
   listed (the registry is append-only, so the superseded row itself keeps
   whatever status it was written with). The summary line counts what was hidden;
-  add `--include-superseded` to see those rows.
+  add `--include-superseded` to see those rows. Everything else fails open: an
+  unrecognized `follow_up_status` counts as OPEN and is listed with a warning,
+  never dropped, because losing an open finding is worse than showing a stale one.
 - **During mining** for each new finding:
   ```bash
   python ~/.claude/skills/pattern-retrospective/lib/repeat_detector.py \

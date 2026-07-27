@@ -10,6 +10,7 @@ the evidence to every later reader.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,15 @@ try:  # register_finding.py needs these to get past its own dependency check
     MISSING_DEPS = None
 except ImportError as exc:  # pragma: no cover - environment-dependent
     MISSING_DEPS = "needs optional deps ({}): pip install -r requirements-optional.txt".format(exc.name)
+
+# Skipping keeps the suite runnable without the optional deps, but a silent skip
+# in CI would let the headline confidence gate go unexercised behind a green
+# check. CI sets this so a missing dep is a hard failure there.
+if MISSING_DEPS is not None and os.environ.get("REQUIRE_OPTIONAL_DEPS") == "1":
+    raise RuntimeError(
+        "REQUIRE_OPTIONAL_DEPS=1 but " + MISSING_DEPS + " -- refusing to skip "
+        "these tests silently."
+    )
 
 needs_deps = unittest.skipIf(MISSING_DEPS is not None, MISSING_DEPS or "")
 
@@ -117,7 +127,7 @@ class TestConfidenceGate(unittest.TestCase):
         )
         self.assertEqual(res.returncode, EXIT_ARGS)
 
-    def test_agreeing_confidence_is_accepted_verbatim(self):
+    def test_agreeing_confidence_is_accepted(self):
         res = invoke(
             self.root,
             "--evidence-supporting", "6",
@@ -207,6 +217,21 @@ class TestConfidenceGate(unittest.TestCase):
             "--confidence", "0.755",
         )
         self.assertEqual(res.returncode, EXIT_OK, res.stderr)
+        self.assertEqual(
+            json.loads(res.stdout)["confidence"], 0.75,
+            "a value that merely passed the check must not be stored verbatim",
+        )
+
+    def test_supplied_confidence_is_never_stored_verbatim(self):
+        """--confidence is an assertion to check, not a value to keep."""
+        res = invoke(
+            self.root,
+            "--evidence-supporting", "10",
+            "--evidence-contradicting", "0",
+            "--confidence", "0.834",
+        )
+        self.assertEqual(res.returncode, EXIT_OK, res.stderr)
+        self.assertEqual(json.loads(res.stdout)["confidence"], 0.83)
 
     def test_negative_counts_are_refused_before_dividing(self):
         """s=-2, c=0 would make the denominator zero."""

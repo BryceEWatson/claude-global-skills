@@ -42,7 +42,7 @@ CONVENTION_GLOB = str(Path.home() / "Projects" / "*" / "reports" / "_data" / "re
 REGISTRY_REL = Path("reports") / "_data" / "retro-findings.jsonl"
 
 # Same shape register_finding.py writes and validates against _schema.json.
-FINDING_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{3}$")
+FINDING_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{3}$", re.ASCII)
 
 STATUS_PENDING = "pending"
 STATUS_IN_PROGRESS = "in-progress"
@@ -57,6 +57,8 @@ TERMINAL_STATUSES = {
     STATUS_SUPERSEDED,
     STATUS_CANCELLED,
 }
+
+KNOWN_STATUSES = TERMINAL_STATUSES | {STATUS_PENDING, STATUS_IN_PROGRESS}
 
 
 def find_project_root_from_cwd() -> Path:
@@ -139,7 +141,7 @@ def iter_rows(paths):
             continue
         key = registry_key(path)
         try:
-            with path.open(encoding="utf-8", errors="replace") as f:
+            with path.open(encoding="utf-8-sig", errors="replace") as f:
                 for lineno, line in enumerate(f, 1):
                     line = line.strip()
                     if not line:
@@ -196,6 +198,55 @@ def finding_id_of(row):
     return fid if FINDING_ID_RE.match(fid) else None
 
 
+def is_open_status(status, include_shipped):
+    """Whether a row with this status belongs in a "still open" report.
+
+    Deliberately a DENY-list. Only the four terminal statuses close a finding;
+    everything else is treated as open and surfaced -- a typo (`in_progress`),
+    a different case (`Pending`), an empty or missing value, a hand-edited
+    non-string. An allow-list of {pending, in-progress} made a genuinely open
+    finding vanish on a one-character typo, with no warning and no count, which
+    is the exact failure this file exists to prevent. Unknown means open.
+    """
+    if status == STATUS_SHIPPED:
+        return include_shipped
+    return status not in TERMINAL_STATUSES
+
+
+def ids_on_supersedes_cycles(edges):
+    """Finding ids sitting on a supersedes cycle. `edges` maps id -> set(ids).
+
+    Two rows that supersede each other close each other, so BOTH vanish and no
+    successor survives. Iterative DFS (no recursion limit to trip over) marking
+    every node reachable on a back-edge.
+    """
+    WHITE, GREY, BLACK = 0, 1, 2
+    color = {}
+    on_cycle = set()
+    for root in sorted(edges):
+        if color.get(root, WHITE) != WHITE:
+            continue
+        color[root] = GREY
+        path = [root]
+        stack = [(root, iter(sorted(edges.get(root, ()))))]
+        while stack:
+            node, successors = stack[-1]
+            nxt = next(successors, None)
+            if nxt is None:
+                color[node] = BLACK
+                stack.pop()
+                path.pop()
+                continue
+            state = color.get(nxt, WHITE)
+            if state == GREY:
+                on_cycle.update(path[path.index(nxt):])
+            elif state == WHITE:
+                color[nxt] = GREY
+                path.append(nxt)
+                stack.append((nxt, iter(sorted(edges.get(nxt, ())))))
+    return on_cycle
+
+
 def collect_superseded(pairs):
     """Map registry_key -> set of finding_ids that some other row supersedes.
 
@@ -211,7 +262,7 @@ def collect_superseded(pairs):
     silence: an unexplained disappearance is the same class of defect as the
     false-overdue this closure logic exists to fix.
     """
-    out = {}
+    edges = {}
     for key, row in pairs:
         sup = row.get("supersedes")
         if not isinstance(sup, str):
@@ -241,7 +292,24 @@ def collect_superseded(pairs):
                 file=sys.stderr,
             )
             continue
-        out.setdefault(key, set()).add(sup)
+        edges.setdefault(key, {}).setdefault(own, set()).add(sup)
+
+    out = {}
+    for key, per_registry in edges.items():
+        cyclic = ids_on_supersedes_cycles(per_registry)
+        if cyclic:
+            print(
+                "warn: supersedes cycle among " + ", ".join(sorted(cyclic))
+                + " in " + str(key) + " -- ignoring their links so none is "
+                "hidden; fix the ledger",
+                file=sys.stderr,
+            )
+        for own, targets in per_registry.items():
+            if own in cyclic:
+                # Fail OPEN: a cycle has no surviving successor, so honoring
+                # its links would hide every finding in it.
+                continue
+            out.setdefault(key, set()).update(targets)
     return out
 
 
@@ -278,20 +346,25 @@ def filter_rows(pairs, asof, include_shipped, include_superseded=False):
 
     out = []
     suppressed = 0
+    unknown_statuses = set()
+    malformed = {}
     for key, row in pairs:
+        if finding_id_of(row) is None:
+            # Not a finding: no id to track it by, and it would render as a
+            # blank table row. Warn rather than drop silently -- and warn
+            # rather than invent an "open finding" the ledger does not have.
+            malformed[key] = malformed.get(key, 0) + 1
+            continue
+
         status = text_field(row, "follow_up_status")
         closed = is_superseded(key, row, superseded)
 
         past_due, days_overdue = classify(row, asof, closed=closed)
 
-        keep = False
-        if past_due:
-            keep = True
-        elif status in (STATUS_PENDING, STATUS_IN_PROGRESS):
-            keep = True
-        elif include_shipped and status == STATUS_SHIPPED:
-            keep = True
+        if status not in KNOWN_STATUSES:
+            unknown_statuses.add(status)
 
+        keep = is_open_status(status, include_shipped)
         if not keep:
             continue
         if closed:
@@ -304,6 +377,20 @@ def filter_rows(pairs, asof, include_shipped, include_superseded=False):
         annotated["_days_overdue"] = days_overdue
         annotated["_closed_by_supersedes"] = closed
         out.append(annotated)
+
+    for status in sorted(unknown_statuses):
+        print(
+            "warn: follow_up_status " + repr(status) + " is not one of "
+            + ", ".join(sorted(KNOWN_STATUSES))
+            + " -- treated as OPEN and listed; fix the ledger",
+            file=sys.stderr,
+        )
+    for key, count in sorted(malformed.items()):
+        print(
+            "warn: skipped " + str(count) + " row(s) with no well-formed "
+            "finding_id in " + str(key) + " -- not listed; fix the ledger",
+            file=sys.stderr,
+        )
     return out, suppressed
 
 
@@ -336,20 +423,33 @@ def md_escape(s):
     return (s or "").replace("|", "\\|")
 
 
-def summary_line(rows, suppressed):
+def suppression_note(suppressed, shown):
+    """One wording for both output formats. Empty when nothing was closed."""
+    if not suppressed:
+        return ""
+    if shown:
+        return (
+            "{} row(s) below are closed by a supersedes link and are shown only "
+            "because --include-superseded was passed.".format(suppressed)
+        )
+    return (
+        "{} row(s) closed by a supersedes link (re-run with "
+        "--include-superseded to see them).".format(suppressed)
+    )
+
+
+def summary_line(rows, suppressed, shown=False):
     text = (
         "_" + str(len(rows)) + " row(s) -- past-due first, then in-progress, "
         "then pending."
     )
-    if suppressed:
-        text += (
-            " " + str(suppressed) + " row(s) closed by a supersedes link "
-            "(re-run with --include-superseded to see them)."
-        )
+    note = suppression_note(suppressed, shown)
+    if note:
+        text += " " + note
     return text + "_"
 
 
-def render_markdown(rows, asof, suppressed=0):
+def render_markdown(rows, asof, suppressed=0, shown=False):
     header = (
         "| finding_id | project | retro_date | category | status | "
         "target_date | days_overdue | claim |"
@@ -358,7 +458,7 @@ def render_markdown(rows, asof, suppressed=0):
     lines = [
         "# Retro follow-up -- as of " + asof.isoformat(),
         "",
-        summary_line(rows, suppressed),
+        summary_line(rows, suppressed, shown),
         "",
         header,
         sep,
@@ -494,15 +594,15 @@ def main(argv=None):
     sorted_rows = sort_rows(filtered)
 
     if args.format == "json":
-        if suppressed and not args.include_superseded:
-            print(
-                "note: " + str(suppressed) + " row(s) hidden -- closed by a "
-                "supersedes link; re-run with --include-superseded to see them",
-                file=sys.stderr,
-            )
+        note = suppression_note(suppressed, args.include_superseded)
+        if note:
+            print("note: " + note, file=sys.stderr)
         print(render_json(sorted_rows))
     else:
-        print(render_markdown(sorted_rows, asof, suppressed), end="")
+        print(
+            render_markdown(sorted_rows, asof, suppressed, args.include_superseded),
+            end="",
+        )
     return 0
 
 

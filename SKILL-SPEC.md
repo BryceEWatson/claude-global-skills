@@ -149,12 +149,13 @@ machine with only `node` and `python` present.
   it must emit a clear `pip install --user <pkg>` fallback message rather than
   crashing the whole skill.
 
-The only two third-party Python deps currently in the repo are precedents for
+The three third-party Python deps currently in the repo are precedents for
 this pattern:
 
 | Dependency | Where | Why it is allowed |
 |---|---|---|
 | `filelock` | `global-review-loop/lib/ledger_store.py`, `register_finding.py` | Lazy-imported only on the file-locking path; falls back with a `pip install --user filelock` message. |
+| `jsonschema` | `global-review-loop/lib/ledger_store.py`, `pattern-retrospective/lib/register_finding.py` | Lazy-imported only on the row-validation path. `ledger_store.py` falls back to an equivalent manual check; `register_finding.py` exits 3 with a `pip install --user jsonschema` message. |
 | `anthropic` | `global-review-loop` (`dual_llm_coder.py`) | Lazy-imported only on the inter-rater / LLM path; not needed for the common path. |
 
 If you add a third dependency, it must follow this same lazy-import-with-

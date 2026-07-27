@@ -8,7 +8,7 @@ These scripts are the substep helpers called by the retrospective workflow descr
 python ~/.claude/skills/pattern-retrospective/lib/<script>.py --help
 ```
 
-All scripts are stdlib-only where possible (`filelock` is the one pinned PyPI dependency, for `register_finding.py`'s per-project lock; `anthropic` is required only for `dual_llm_coder.py`).
+All scripts are stdlib-only where possible. `register_finding.py` needs two PyPI packages, `filelock` (per-project lock) and `jsonschema` (row validation), and exits 3 with a `pip install` hint without either; `anthropic` is required only for `dual_llm_coder.py`. See [`requirements-optional.txt`](../../requirements-optional.txt).
 
 ## Scripts (full set after all phases ship)
 
@@ -74,7 +74,7 @@ reader therefore treats "another row in the same registry supersedes me" exactly
 Without that, every resolved finding is reported as permanently overdue, and a report
 that flags finished work as late is one the reader learns to skip.
 
-Two details worth knowing:
+Three details worth knowing:
 
 - The suppression is **counted in the summary line**, not silent. `--include-superseded`
   lists those rows again, marked `(closed: superseded)`; in `--format json` each row
@@ -85,13 +85,23 @@ Two details worth knowing:
   finding in another under `--all`.
 - Closure only ever links **two well-formed finding ids**. A corrupt or hand-written
   row does not get to hide an open finding on the strength of a `supersedes` key
-  alone — it must itself carry a `YYYY-MM-DD-NNN` id, and self-referential links are
-  ignored. Every rejected link warns on stderr; hiding an open finding silently is
-  the same class of defect as the false-overdue this logic exists to fix.
+  alone — it must itself carry a `YYYY-MM-DD-NNN` id. Self-referential links are
+  ignored, and so is any link on a **cycle** (two rows superseding each other would
+  otherwise close each other, leaving no surviving successor and hiding both). Every
+  rejected link warns on stderr.
 
-A malformed *field* is tolerated the same way `iter_rows` already tolerates a
-malformed *line* — warn, coerce, keep going. A hand-edited `"follow_up_status": 123`
-used to take down the whole report with an `AttributeError`.
+**Unknown status means OPEN.** The keep-gate is a deny-list, not an allow-list: only
+the four terminal statuses (`shipped`, `abandoned`, `superseded`, `cancelled`) close a
+finding. A typo (`in_progress`), a different case (`Pending`), an empty value, a
+missing key, or a hand-edited non-string is treated as open, listed, and warned about.
+An allow-list made a genuinely open finding vanish on a one-character typo — silently,
+which is worse than the false-overdue this file exists to fix.
+
+That is the rule the whole reader follows: **fail open, and say so on stderr.** A
+malformed *field* is tolerated the way `iter_rows` already tolerates a malformed
+*line* (warn, coerce, keep going), a BOM-prefixed file is read with `utf-8-sig`
+instead of losing its first row, and a row with no usable `finding_id` is warned about
+rather than either dropped in silence or fabricated into a blank table row.
 
 ### `repeat_detector.py` — during mining, check a candidate claim
 
