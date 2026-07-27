@@ -7,6 +7,25 @@ This is a deploy-by-copy skills library (each skill is copied to
 `~/.claude/skills/<name>/`) rather than a versioned package, so releases are
 grouped by **date** instead of strict [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`register_finding.py` warns when the row it just wrote is uncommitted.** The
+  registry is a plain file in the project's repo. If git tracks it, a freshly
+  appended finding lives only in the working tree, and a `git restore`, branch
+  switch, or stash discards it with no message. The script now prints a
+  ready-to-run `git add && git commit` naming the new finding_id.
+
+  This was found the hard way. In a repo running a dozen-plus concurrent agent
+  worktrees, two separate retrospectives each lost **every** finding they
+  registered, roughly 13 hours apart, both times reverting to the last committed
+  state. Backups rotate at 3, so the snapshot holding the lost rows had already
+  aged out by the time anyone looked.
+
+  It is advice, not a gate: the exit code is unchanged, and the check is
+  fail-quiet (no git, untracked file, or any error → silent).
+
 ## [2026-07-27] — Record-keeping fixes: ledger closure, confidence gate, handoff provenance
 
 Two independent defects in how these skills keep records. Both let a record

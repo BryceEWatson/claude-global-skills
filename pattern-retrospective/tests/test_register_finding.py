@@ -244,6 +244,87 @@ class TestConfidenceGate(unittest.TestCase):
 
 
 @needs_deps
+class TestUncommittedWarning(unittest.TestCase):
+    """A tracked-but-uncommitted row is discarded by any working-tree revert.
+
+    Two real retros lost every finding they registered this way: the rows went
+    to the working tree of a repo with many concurrent agent worktrees, and a
+    `git restore` put the file back to its committed state.
+    """
+
+    def _git(self, cwd, *args):
+        return subprocess.run(
+            ["git", *args], cwd=str(cwd), capture_output=True, text=True
+        )
+
+    def _repo(self, d):
+        root = Path(d)
+        self._git(root, "init", "-q")
+        self._git(root, "config", "user.email", "t@example.com")
+        self._git(root, "config", "user.name", "t")
+        return root
+
+    def _register(self, root):
+        return invoke(
+            root, "--evidence-supporting", "3", "--evidence-contradicting", "0",
+            dry_run=False,
+        )
+
+    def test_warns_when_tracked_and_uncommitted(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self._repo(d)
+            reg = root / "reports" / "_data" / "retro-findings.jsonl"
+            reg.parent.mkdir(parents=True)
+            reg.write_text("", encoding="utf-8")
+            self._git(root, "add", "-A")
+            self._git(root, "commit", "-qm", "seed")
+
+            res = self._register(root)
+        self.assertEqual(res.returncode, EXIT_OK, res.stderr)
+        self.assertIn("NOT committed", res.stderr)
+        self.assertIn("git restore", res.stderr.replace("`", ""))
+
+    def test_silent_when_the_registry_is_untracked(self):
+        """An untracked file is not what a revert touches."""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._repo(d)
+            (root / "seed.txt").write_text("x", encoding="utf-8")
+            self._git(root, "add", "-A")
+            self._git(root, "commit", "-qm", "seed")
+
+            res = self._register(root)
+        self.assertEqual(res.returncode, EXIT_OK, res.stderr)
+        self.assertNotIn("NOT committed", res.stderr)
+
+    def test_silent_outside_a_git_repo(self):
+        with tempfile.TemporaryDirectory() as d:
+            res = self._register(Path(d))
+        self.assertEqual(res.returncode, EXIT_OK, res.stderr)
+        self.assertNotIn("NOT committed", res.stderr)
+
+    def test_warning_never_changes_the_exit_code(self):
+        """It is advice, not a gate -- callers keying on exit status must not break."""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._repo(d)
+            reg = root / "reports" / "_data" / "retro-findings.jsonl"
+            reg.parent.mkdir(parents=True)
+            reg.write_text("", encoding="utf-8")
+            self._git(root, "add", "-A")
+            self._git(root, "commit", "-qm", "seed")
+            res = self._register(root)
+        self.assertEqual(res.returncode, EXIT_OK)
+        self.assertTrue(res.stdout.strip(), "the finding_id still goes to stdout")
+
+    def test_dry_run_does_not_warn(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self._repo(d)
+            res = invoke(
+                root, "--evidence-supporting", "3", "--evidence-contradicting", "0"
+            )
+        self.assertNotIn("NOT committed", res.stderr)
+
+
+@needs_deps
 class TestExistingRowsUntouched(unittest.TestCase):
     def test_registering_does_not_rewrite_prior_rows(self):
         """A pre-existing row whose confidence disagrees with its counts stays as written."""
