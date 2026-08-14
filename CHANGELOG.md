@@ -103,11 +103,21 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 - **`session-end` under-reported a session whose work landed through merged PRs.**
   Step 1 gathered evidence from `git status --short` and `git diff --stat`, both
   empty by construction once the work has merged, so the artifact list came out
-  blank and a productive shift was recorded as an empty one. An empty result is
-  now an explicit trigger to widen the search (landed commits, the files they
-  touched, merged PRs, and output living outside the checkout) rather than a
-  finding. If it is still empty afterwards, the skill must say so as a stated
-  finding instead of omitting the section silently.
+  blank and a productive shift was recorded as an empty one. The skill now always
+  looks for work that already landed (commits in the session window, the files
+  they touched, merged PRs, and output living outside the checkout), rather than
+  gating that search on the working tree being clean. Gating on cleanliness would
+  have left the same hole half-open: merge a PR, leave one unrelated stray file,
+  and the status probe is non-empty, so a clean-tree-only check never fires and
+  the handoff keeps the stray file while dropping the merged work. If nothing
+  turns up, the skill must say so as a stated finding instead of omitting the
+  section silently.
+
+  PR discovery is filtered by author and date and sets `--limit` explicitly
+  (`gh pr list` defaults to 30 and truncates silently), and the skill is explicit
+  that filtering is necessary but not sufficient: concurrent agent sessions share
+  one account, so each candidate still has to be correlated with the session
+  before it is claimed as this shift's work.
 
 ### Added
 

@@ -60,10 +60,13 @@ the evidence that produced them.
 ## Step 1 — Gather evidence (do this before writing anything)
 
 - `git status --short` and `git diff --stat` (+ `git log --oneline -15`) — what actually changed / was created. Every artifact you cite must appear here or on disk.
-- **An empty `git status` / `git diff` is a signal to widen the search, not a finding.** A session whose
-  work landed through merged PRs has a clean working tree *by construction* — the work is real, and these
-  two probes are structurally blind to it. Reporting "no artifacts" there records a productive shift as
-  an empty one. When both come back empty, go looking where landed work actually shows up:
+- **Always look for work that already landed — never gate this on the working tree being clean.** Those
+  two probes are structurally blind to anything that has merged: a session whose work went out through
+  PRs has a clean tree *by construction*, and reporting "no artifacts" there records a productive shift
+  as an empty one. A dirty tree does not clear you either. Merge a PR and leave one unrelated edit or
+  stray untracked file, and the status probe is non-empty, so a check that fires only on "both empty"
+  never runs and the handoff silently keeps the stray file while dropping the merged work. The session
+  *window* is what decides this, not tree cleanliness, so run these every time:
   - `git log --oneline --since=<session start>` (and on the default branch) — what landed during the shift.
   - `git show --stat <sha>` per commit, or `git diff --stat <base-branch>...HEAD` — the files those commits
     touched. (Three-dot already means "since the merge base"; don't pass a merge-base into it.)
@@ -78,7 +81,7 @@ the evidence that produced them.
     evidence you did it, and an artifact list is exactly where a borrowed claim does damage.
   - Output that lives outside this checkout entirely: another worktree, a sibling repo, or a non-repo
     artifact (a published page, a scheduled task, a review verdict left on a PR).
-  If it is *still* empty after widening, say so as an explicit finding — "no files changed; this shift's
+  If this turns up nothing either, say so as an explicit finding — "no files changed; this shift's
   output was X" — never as a silently omitted section.
 - The current **TodoWrite** list — the authoritative in-progress/next-step state.
 - New/modified files of substance — Read or skim the ones central to the session (specs, code, docs).
@@ -147,8 +150,19 @@ session has been working in, that is precisely what the operator needs to see, n
 committing: the primary checkout outlives worktree cleanup, so the read-only gate stands. Whether
 handoffs are *tracked* is the project's call and genuinely varies — some repos commit their handoff
 history, others gitignore `.claude/` wholesale, and a handoff written under an ignored path is still
-durable, just untracked. Report which you observed (`git check-ignore -v <path>`) and leave the decision
-to the project; a declared close-out contract (Step 4b) is the one thing that can authorize more.
+durable, just untracked. Report which you observed and leave the decision to the project; a declared
+close-out contract (Step 4b) is the one thing that can authorize more.
+
+Run that check **from the checkout you wrote to**, not from where you're standing:
+
+```bash
+git -C <primary-checkout> check-ignore -v .claude/handoffs/<file>
+```
+
+Bare `git check-ignore -v <absolute path>` from inside a worktree exits 128 with *"is outside
+repository"*, because the path belongs to a different checkout than the cwd. Exit 0 means ignored,
+1 means not ignored, and 128 means you asked the wrong repo. (If the primary is a bare repo, there is
+no worktree to test against and no tracking question to answer; skip the check and say so.)
 
 **Stamp a provenance marker as the very FIRST line of the handoff file** (before the H1), so a later automated
 review can identify the handoff THIS session wrote and never a concurrent sibling session's:
