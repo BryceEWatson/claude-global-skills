@@ -256,8 +256,13 @@ Present it in a fenced block, ready to paste. Keep it tight but complete — it 
   contract authorizes (Step 4b). No commits. Absent such a contract, no edits to other files.
 - **The handoff went to the primary checkout**, not a worktree that is about to be deleted (Step 4), and
   its absolute path is stated in the closing message.
-- Every cited artifact exists in `git status`/on disk **or in the widened evidence** of Step 1; every
-  load-bearing claim is tagged or evidenced. A clean working tree was investigated, not assumed empty.
+- Every cited artifact exists in `git status`/on disk, **in the widened evidence** of Step 1, **or is a
+  change an executed close-out contract made** (Step 4b) — including a file it *deleted*. Releasing a
+  claim often means removing an untracked or ignored lock file, which then exists nowhere: not on disk,
+  not in `git status` (deleting an ignored file leaves no status entry), not in any commit. The executed
+  contract is the evidence for those, and without this carve-out the gate would force you to drop the
+  close-out from the record or fail your own rule.
+- Every load-bearing claim is tagged or evidenced. A clean working tree was investigated, not assumed empty.
 - **Re-read your own draft for untagged diagnoses.** Scan for the shapes that hide inferences: *"X is the
   source of Y" · "the reason is…" · "this reads the…" · "that's a bug/divergence/leftover" · "should be
   fixed"*. For each, ask: **did I check this, or did I conclude it?** Concluded → `[derived]` (or go
