@@ -100,6 +100,13 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   absolute path would carry the operator's home directory and username into
   shared history.
 
+  Handoff filenames are also collision-proofed, for the same reason: a shared
+  directory means two concurrent sessions can land on one path, and a silent
+  overwrite loses a handoff just as thoroughly as worktree cleanup does. The
+  timestamp is now specified to the second (existing handoff history mixes
+  second, minute, and date-only resolutions), and an existing target is never
+  clobbered: the skill appends a short session-id discriminator instead.
+
 - **`session-end` under-reported a session whose work landed through merged PRs.**
   Step 1 gathered evidence from `git status --short` and `git diff --stat`, both
   empty by construction once the work has merged, so the artifact list came out

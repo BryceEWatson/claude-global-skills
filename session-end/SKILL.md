@@ -125,8 +125,15 @@ next session from "fixing" a safety property.
 ## Step 4 — Write the handoff to disk (durable + machine-readable)
 
 Write the full summary to a file so the next session can READ it rather than trust pasted prose:
-`<primary-checkout>/.claude/handoffs/<UTC-timestamp>_<slug>.md` (create the dir; it's additive/safe).
+`<primary-checkout>/.claude/handoffs/<YYYYMMDDTHHMMSSZ>_<slug>.md` (create the dir; it's additive/safe).
 If not in a writable repo, skip and emit in-chat only.
+
+**Timestamp to the second, and never overwrite an existing file.** That directory is shared by every
+worktree (see below), so two concurrent sessions can land on one path: coarse stamps make it easy, and
+similar tasks produce similar slugs. Losing a handoff to a silent overwrite is no better than losing it
+to worktree cleanup, and the provenance markers *inside* the file cannot save you from a clobbered path.
+If the target already exists, do not clobber it. Append a short discriminator (the first 8 characters of
+the session id you stamp below) and write that instead.
 
 **Resolve `<primary-checkout>` explicitly — it is NOT necessarily where you are standing.** If this
 session is running in a linked git worktree, the obvious answers (`git rev-parse --show-toplevel`, or the
