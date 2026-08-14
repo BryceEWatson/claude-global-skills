@@ -19,8 +19,18 @@ of session-end's "ground in artifacts": there you grounded the summary; here you
 
 ## Step 1 — Locate the handoff
 
-- Default: the newest file in `<primary-checkout>/.claude/handoffs/` (prefer the full handoff doc; also
-  read its companion continuation-prompt file if one exists).
+- Default: in `<primary-checkout>/.claude/handoffs/`, the newest handoff **whose
+  `<!-- session-end:origin branch=… worktree=… -->` stamp matches the branch you are resuming** (prefer
+  the full handoff doc; also read its companion continuation-prompt file if one exists).
+- **Never take "newest" on faith when the candidates disagree.** That directory is shared: it lives in
+  the primary checkout so handoffs survive worktree cleanup, which means concurrent sessions in different
+  worktrees all write into it. Picking purely by recency will hand you the handoff of whichever session
+  happened to finish last, and resuming another branch's work is a *silent* wrong start, not a visible
+  error. So:
+  - Match on the origin stamp first. An unambiguous branch match is the answer.
+  - If several handoffs match, or the newest does **not** match the current branch, or the stamp is
+    missing (an older handoff, written before this was stamped), do not guess. List the candidates with
+    their timestamp, branch, and slug, and ask which to resume.
 - **Resolve `<primary-checkout>` the same way `session-end` does when it writes** — with
   `git worktree list --porcelain | head -1 | sed 's/^worktree //'`, *not* `git rev-parse --show-toplevel`.
   In a linked worktree those differ: `--show-toplevel` returns the worktree's own root, so a pickup

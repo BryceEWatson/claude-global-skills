@@ -152,6 +152,16 @@ review will then safely SKIP reconciling this handoff rather than risk editing t
 are invisible in rendered markdown.) This is the only hook the `/review-loop` "Reconcile the session's handoff"
 step keys on.
 
+**Stamp where the session ran, on the line directly after the provenance marker:**
+`<!-- session-end:origin branch=<current branch> worktree=<git rev-parse --show-toplevel> -->`. Writing to
+the primary checkout is what makes the handoff durable, but it also means sessions running in *different*
+worktrees now share one handoff directory. "The newest file" therefore stops being a safe way for a later
+`session-pickup` to tell whose handoff it is holding: end two concurrent sessions minutes apart and the
+newest belongs to whichever finished last, not to the branch being resumed. This line is what lets pickup
+disambiguate, and it is the reason to spend two values on it. Note this is the *worktree's* toplevel — the
+one place `--show-toplevel` is the right call, because here you are recording where you ran, not where
+you write.
+
 ## Step 4b — Honour the project's close-out contract (only if it declares one)
 
 Some projects have a session **acquire** state at start that must be **released** at end: a claim on a

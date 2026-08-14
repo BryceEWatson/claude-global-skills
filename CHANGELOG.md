@@ -88,6 +88,15 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   on the session-id provenance marker, never on recency, which is what makes a
   shared handoff directory safe for concurrent sessions.
 
+  Because that directory is now genuinely shared across worktrees, `session-end`
+  additionally stamps `<!-- session-end:origin branch=… worktree=… -->` into each
+  handoff, and `session-pickup` selects on that stamp instead of on recency alone.
+  Without it, ending two concurrent sessions minutes apart would leave pickup
+  resuming whichever finished last rather than the branch in front of it — a
+  silent wrong start rather than a visible error. Where the stamp is missing,
+  ambiguous, or disagrees with the current branch, pickup now lists the candidates
+  and asks instead of guessing.
+
 - **`session-end` under-reported a session whose work landed through merged PRs.**
   Step 1 gathered evidence from `git status --short` and `git diff --stat`, both
   empty by construction once the work has merged, so the artifact list came out
