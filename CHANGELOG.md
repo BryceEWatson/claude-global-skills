@@ -104,8 +104,12 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   directory means two concurrent sessions can land on one path, and a silent
   overwrite loses a handoff just as thoroughly as worktree cleanup does. The
   timestamp is now specified to the second (existing handoff history mixes
-  second, minute, and date-only resolutions), and an existing target is never
-  clobbered: the skill appends a short session-id discriminator instead.
+  second, minute, and date-only resolutions), and every filename carries a unique
+  discriminator from the start rather than gaining one once a clash is noticed.
+  Checking for the file and only then adding a suffix does not close the race:
+  both sessions can look, both can see nothing, and both can write the same path.
+  Where no session id is available the skill uses a random token, since the
+  unattributed fallback would otherwise be identical for every such session.
 
 - **`session-end` under-reported a session whose work landed through merged PRs.**
   Step 1 gathered evidence from `git status --short` and `git diff --stat`, both
@@ -143,6 +147,13 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   message. Silent half-completion is the failure this exists to prevent: it leaves
   the project believing close-out ran. No project-specific logic lives in the
   skill; the contract file is the whole interface.
+
+  Because this step necessarily runs after the handoff is written, a contract that
+  succeeds mutates state the handoff has already described, leaving the file it
+  touched out of the artifact list and any "claim is held" line false. The skill
+  therefore amends the handoff after a successful close-out too, not only after a
+  failed one. Otherwise the skill would produce exactly what it exists to prevent:
+  a record that reads as current while describing state that no longer exists.
 
 ## [2026-07-27] — Record-keeping fixes: ledger closure, confidence gate, handoff provenance
 
