@@ -125,15 +125,25 @@ next session from "fixing" a safety property.
 ## Step 4 — Write the handoff to disk (durable + machine-readable)
 
 Write the full summary to a file so the next session can READ it rather than trust pasted prose:
-`<primary-checkout>/.claude/handoffs/<YYYYMMDDTHHMMSSZ>_<slug>.md` (create the dir; it's additive/safe).
-If not in a writable repo, skip and emit in-chat only.
+`<primary-checkout>/.claude/handoffs/<YYYYMMDDTHHMMSSZ>_<slug>_<discriminator>.md` (create the dir; it's
+additive/safe). If not in a writable repo, skip and emit in-chat only.
 
-**Timestamp to the second, and never overwrite an existing file.** That directory is shared by every
-worktree (see below), so two concurrent sessions can land on one path: coarse stamps make it easy, and
-similar tasks produce similar slugs. Losing a handoff to a silent overwrite is no better than losing it
-to worktree cleanup, and the provenance markers *inside* the file cannot save you from a clobbered path.
-If the target already exists, do not clobber it. Append a short discriminator (the first 8 characters of
-the session id you stamp below) and write that instead.
+**Every filename carries a unique discriminator from the start — not only when a clash is noticed.**
+That directory is shared by every worktree (see below), so two concurrent sessions can land on one path,
+and losing a handoff to a silent overwrite is no better than losing it to worktree cleanup. Checking
+whether the file exists and only *then* adding a suffix does not fix this: both sessions can look, both
+can see nothing, and both can write the same path. Make the name unique before you write it.
+
+**The discriminator is a fresh random token per write** (6-8 chars is plenty), generated at the moment
+you write, not derived from anything. Don't reach for the session id: it is constant *within* a session,
+so invoking `session-end` twice in the same second with the same slug would rebuild the same path, and
+two different sessions can share a short id prefix anyway. Nothing depends on the filename identifying
+the session, because the provenance marker inside the file already does that.
+
+Then keep the no-clobber check as a backstop: if the path somehow exists, generate a new token rather
+than overwriting. The random token is what makes a collision improbable; refusing to overwrite is what
+keeps an improbable one from costing a handoff. Second-resolution timestamps matter for the same reason:
+coarse stamps widen the window, and similar concurrent tasks produce similar slugs.
 
 **Resolve `<primary-checkout>` explicitly — it is NOT necessarily where you are standing.** If this
 session is running in a linked git worktree, the obvious answers (`git rev-parse --show-toplevel`, or the
@@ -213,6 +223,13 @@ state left held, where it lives, and the command to clear it — in the handoff'
 *and* in your closing message. An unreleasable claim the operator can see is a nuisance; one they
 cannot is a trap for the next session.
 
+**Then go back and record what it changed.** This step runs after the handoff is written, so a contract
+that succeeds mutates state the handoff has already described — the file it touched is missing from
+**Artifacts**, and any line saying the claim is held is now false. That is the same failure this skill
+exists to prevent, produced by the skill itself: a record that reads as current while describing a state
+that no longer exists. Whatever the contract changed is an artifact of this session, so amend the
+handoff to list it and to reflect the released state. Update on the success path, not only on failure.
+
 ## Step 5 — Emit the continuation prompt (ONLY if work is mid-flight)
 
 **If the session is DONE** — nothing in flight (work shipped, parked, or merged) — skip this step.
@@ -239,8 +256,13 @@ Present it in a fenced block, ready to paste. Keep it tight but complete — it 
   contract authorizes (Step 4b). No commits. Absent such a contract, no edits to other files.
 - **The handoff went to the primary checkout**, not a worktree that is about to be deleted (Step 4), and
   its absolute path is stated in the closing message.
-- Every cited artifact exists in `git status`/on disk **or in the widened evidence** of Step 1; every
-  load-bearing claim is tagged or evidenced. A clean working tree was investigated, not assumed empty.
+- Every cited artifact exists in `git status`/on disk, **in the widened evidence** of Step 1, **or is a
+  change an executed close-out contract made** (Step 4b) — including a file it *deleted*. Releasing a
+  claim often means removing an untracked or ignored lock file, which then exists nowhere: not on disk,
+  not in `git status` (deleting an ignored file leaves no status entry), not in any commit. The executed
+  contract is the evidence for those, and without this carve-out the gate would force you to drop the
+  close-out from the record or fail your own rule.
+- Every load-bearing claim is tagged or evidenced. A clean working tree was investigated, not assumed empty.
 - **Re-read your own draft for untagged diagnoses.** Scan for the shapes that hide inferences: *"X is the
   source of Y" · "the reason is…" · "this reads the…" · "that's a bug/divergence/leftover" · "should be
   fixed"*. For each, ask: **did I check this, or did I conclude it?** Concluded → `[derived]` (or go

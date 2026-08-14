@@ -290,7 +290,7 @@ the session knowing exactly what remains to ship it.
 
 ## Reconcile the session's handoff (code mode; only the handoff THIS session wrote)
 
-`session-end` writes a handoff (`<primary-checkout>/.claude/handoffs/<ts>_<slug>.md`) BEFORE this review runs, so its
+`session-end` writes a handoff (`<primary-checkout>/.claude/handoffs/<ts>_<slug>_<discriminator>.md`) BEFORE this review runs, so its
 review-status can be stale the instant the verdict lands ("not reviewed yet"), or a load-bearing finding can
 change the risk of its stated next-action. On a **terminal verdict**, reconcile it — run this AFTER "Leave a
 trail on the PR" and BEFORE "State archival", on the still-on-disk state. **Code mode only** (skip in
