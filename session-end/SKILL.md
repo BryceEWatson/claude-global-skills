@@ -67,9 +67,11 @@ the evidence that produced them.
   - `git log --oneline --since=<session start>` (and on the default branch) — what landed during the shift.
   - `git show --stat <sha>` per commit, or `git diff --stat <base-branch>...HEAD` — the files those commits
     touched. (Three-dot already means "since the merge base"; don't pass a merge-base into it.)
-  - `gh pr list --state merged --author @me --search "merged:>=<session start date>"` — PRs that closed
-    during the shift. Bound it by **both** date and author: a bare `--limit N` returns the last N merges
-    whenever they happened, and an unfiltered window sweeps in every *other* contributor's merges too.
+  - `gh pr list --state merged --author @me --search "merged:>=<session start date>" --limit 100` — PRs
+    that closed during the shift. Bound it by **both** date and author, and set `--limit` explicitly: an
+    unfiltered window sweeps in every *other* contributor's merges, and `--limit` defaults to 30 and
+    truncates *silently*, which is the same under-reporting this whole bullet exists to stop. If you get
+    back exactly the limit, assume you hit the ceiling and raise it rather than reporting a round number.
     Filtering is necessary but not sufficient — `--author @me` still collapses concurrent agent sessions
     running under one account, so **correlate each candidate with this session before claiming it**
     (does its branch, timing, or content actually match work you did?). Landing in the window is not
