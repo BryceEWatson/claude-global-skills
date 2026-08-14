@@ -108,8 +108,11 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   discriminator from the start rather than gaining one once a clash is noticed.
   Checking for the file and only then adding a suffix does not close the race:
   both sessions can look, both can see nothing, and both can write the same path.
-  Where no session id is available the skill uses a random token, since the
-  unattributed fallback would otherwise be identical for every such session.
+  The discriminator is a fresh random token generated per write, not the session
+  id, which is constant within a session and so would rebuild the same path if
+  `session-end` ran twice in one second. The no-clobber check is kept as a
+  backstop: the token makes a collision improbable, and refusing to overwrite
+  keeps an improbable one from costing a handoff.
 
 - **`session-end` under-reported a session whose work landed through merged PRs.**
   Step 1 gathered evidence from `git status --short` and `git diff --stat`, both

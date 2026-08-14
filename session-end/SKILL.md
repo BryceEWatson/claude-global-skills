@@ -134,10 +134,16 @@ and losing a handoff to a silent overwrite is no better than losing it to worktr
 whether the file exists and only *then* adding a suffix does not fix this: both sessions can look, both
 can see nothing, and both can write the same path. Make the name unique before you write it.
 
-Use the first 8 characters of the session id you stamp below. **If you don't have a session id, that
-fallback is not unique** — every unattributed session would derive the same string — so use a short
-random token instead. Second-resolution timestamps are required for the same reason: coarse stamps
-widen the window, and similar concurrent tasks produce similar slugs.
+**The discriminator is a fresh random token per write** (6-8 chars is plenty), generated at the moment
+you write, not derived from anything. Don't reach for the session id: it is constant *within* a session,
+so invoking `session-end` twice in the same second with the same slug would rebuild the same path, and
+two different sessions can share a short id prefix anyway. Nothing depends on the filename identifying
+the session, because the provenance marker inside the file already does that.
+
+Then keep the no-clobber check as a backstop: if the path somehow exists, generate a new token rather
+than overwriting. The random token is what makes a collision improbable; refusing to overwrite is what
+keeps an improbable one from costing a handoff. Second-resolution timestamps matter for the same reason:
+coarse stamps widen the window, and similar concurrent tasks produce similar slugs.
 
 **Resolve `<primary-checkout>` explicitly — it is NOT necessarily where you are standing.** If this
 session is running in a linked git worktree, the obvious answers (`git rev-parse --show-toplevel`, or the
