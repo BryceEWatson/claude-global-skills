@@ -95,7 +95,10 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   resuming whichever finished last rather than the branch in front of it — a
   silent wrong start rather than a visible error. Where the stamp is missing,
   ambiguous, or disagrees with the current branch, pickup now lists the candidates
-  and asks instead of guessing.
+  and asks instead of guessing. The `worktree=` value is a directory basename and
+  never an absolute path: handoffs are durable and often committed, and an
+  absolute path would carry the operator's home directory and username into
+  shared history.
 
 - **`session-end` under-reported a session whose work landed through merged PRs.**
   Step 1 gathered evidence from `git status --short` and `git diff --stat`, both

@@ -67,8 +67,13 @@ the evidence that produced them.
   - `git log --oneline --since=<session start>` (and on the default branch) — what landed during the shift.
   - `git show --stat <sha>` per commit, or `git diff --stat <base-branch>...HEAD` — the files those commits
     touched. (Three-dot already means "since the merge base"; don't pass a merge-base into it.)
-  - `gh pr list --state merged --search "merged:>=<session start date>"` — PRs that closed during the
-    shift. Bound it by date: a bare `--limit N` returns the last N merges whenever they happened.
+  - `gh pr list --state merged --author @me --search "merged:>=<session start date>"` — PRs that closed
+    during the shift. Bound it by **both** date and author: a bare `--limit N` returns the last N merges
+    whenever they happened, and an unfiltered window sweeps in every *other* contributor's merges too.
+    Filtering is necessary but not sufficient — `--author @me` still collapses concurrent agent sessions
+    running under one account, so **correlate each candidate with this session before claiming it**
+    (does its branch, timing, or content actually match work you did?). Landing in the window is not
+    evidence you did it, and an artifact list is exactly where a borrowed claim does damage.
   - Output that lives outside this checkout entirely: another worktree, a sibling repo, or a non-repo
     artifact (a published page, a scheduled task, a review verdict left on a PR).
   If it is *still* empty after widening, say so as an explicit finding — "no files changed; this shift's
@@ -153,14 +158,19 @@ are invisible in rendered markdown.) This is the only hook the `/review-loop` "R
 step keys on.
 
 **Stamp where the session ran, on the line directly after the provenance marker:**
-`<!-- session-end:origin branch=<current branch> worktree=<git rev-parse --show-toplevel> -->`. Writing to
+`<!-- session-end:origin branch=<current branch> worktree=<basename of the worktree root> -->`. Writing to
 the primary checkout is what makes the handoff durable, but it also means sessions running in *different*
 worktrees now share one handoff directory. "The newest file" therefore stops being a safe way for a later
 `session-pickup` to tell whose handoff it is holding: end two concurrent sessions minutes apart and the
 newest belongs to whichever finished last, not to the branch being resumed. This line is what lets pickup
-disambiguate, and it is the reason to spend two values on it. Note this is the *worktree's* toplevel — the
-one place `--show-toplevel` is the right call, because here you are recording where you ran, not where
-you write.
+disambiguate.
+
+**`worktree=` is the directory's BASENAME, never an absolute path.** A handoff is durable and in many
+projects committed, so anything stamped here can end up in shared or public history — and an absolute
+path carries the operator's home directory, username, and often a client or project name. `branch` is
+what pickup actually matches on; the basename is only a tiebreak for the rare two-worktrees-one-branch
+case, and it buys that without persisting a home path. If even the basename is sensitive, drop the field
+and keep `branch`.
 
 ## Step 4b — Honour the project's close-out contract (only if it declares one)
 
