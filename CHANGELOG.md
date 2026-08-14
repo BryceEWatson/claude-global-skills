@@ -63,6 +63,58 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   It is advice, not a gate: the exit code is unchanged, and the check is
   fail-quiet (no git, untracked file, or any error → silent).
 
+### Fixed
+
+- **`session-end` wrote its handoff into a directory that gets deleted.** Step 4
+  resolved `<project-root>` the obvious way (`git rev-parse --show-toplevel` / the
+  cwd). Inside a linked git worktree that is the *worktree's* root, and worktrees
+  are routinely removed when the task that created them ends — so the single
+  artifact the skill exists to produce was the one thing guaranteed not to
+  survive, while the session reported success. The destination is now resolved
+  with `git worktree list --porcelain | head -1`, which is the primary checkout
+  in a worktree and the same checkout in an ordinary clone, so it runs
+  unconditionally. The skill now also states the absolute path it wrote to.
+
+  The old "never commit" instruction sat oddly next to repos whose handoff
+  history *is* tracked. Resolved in favour of location, not commits: the primary
+  checkout already outlives worktree cleanup, so the read-only gate stands
+  unchanged. Whether handoffs are tracked is left to the project, which genuinely
+  varies — some repos commit them, others gitignore `.claude/` wholesale.
+
+  `session-pickup` and `review-loop`'s handoff-reconcile step read that same
+  directory and are updated to resolve it identically; otherwise a pickup or a
+  reconcile running in a worktree would look in an empty directory and conclude
+  no handoff existed. `review-loop`'s attribution safety is unaffected — it keys
+  on the session-id provenance marker, never on recency, which is what makes a
+  shared handoff directory safe for concurrent sessions.
+
+- **`session-end` under-reported a session whose work landed through merged PRs.**
+  Step 1 gathered evidence from `git status --short` and `git diff --stat`, both
+  empty by construction once the work has merged, so the artifact list came out
+  blank and a productive shift was recorded as an empty one. An empty result is
+  now an explicit trigger to widen the search (landed commits, the files they
+  touched, merged PRs, and output living outside the checkout) rather than a
+  finding. If it is still empty afterwards, the skill must say so as a stated
+  finding instead of omitting the section silently.
+
+### Added
+
+- **`session-end` can honour a project-declared close-out contract.** A project
+  whose sessions acquire state at start — a claim on a shared desk or role, a
+  lock, a lease — had no way to release it at close-out: the skill's safety gate
+  forbids editing any file but the handoff, so a shift that ended cleanly could
+  still leave a claim naming a session that no longer exists, with a symptom that
+  points nowhere near the cause. If `<primary-checkout>/.claude/session-close-out.md`
+  exists, the skill now reads and follows it, and the writes that file names are a
+  declared, scoped exception to the read-only gate. Absent the file the step is
+  skipped entirely — the skill never invents close-out actions.
+
+  When the contract cannot be completed, the skill must name the state left held,
+  where it lives, and how to clear it, in both the handoff and its closing
+  message. Silent half-completion is the failure this exists to prevent: it leaves
+  the project believing close-out ran. No project-specific logic lives in the
+  skill; the contract file is the whole interface.
+
 ## [2026-07-27] — Record-keeping fixes: ledger closure, confidence gate, handoff provenance
 
 Two independent defects in how these skills keep records. Both let a record

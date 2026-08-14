@@ -60,6 +60,19 @@ the evidence that produced them.
 ## Step 1 — Gather evidence (do this before writing anything)
 
 - `git status --short` and `git diff --stat` (+ `git log --oneline -15`) — what actually changed / was created. Every artifact you cite must appear here or on disk.
+- **An empty `git status` / `git diff` is a signal to widen the search, not a finding.** A session whose
+  work landed through merged PRs has a clean working tree *by construction* — the work is real, and these
+  two probes are structurally blind to it. Reporting "no artifacts" there records a productive shift as
+  an empty one. When both come back empty, go looking where landed work actually shows up:
+  - `git log --oneline --since=<session start>` (and on the default branch) — what landed during the shift.
+  - `git show --stat <sha>` per commit, or `git diff --stat <base-branch>...HEAD` — the files those commits
+    touched. (Three-dot already means "since the merge base"; don't pass a merge-base into it.)
+  - `gh pr list --state merged --search "merged:>=<session start date>"` — PRs that closed during the
+    shift. Bound it by date: a bare `--limit N` returns the last N merges whenever they happened.
+  - Output that lives outside this checkout entirely: another worktree, a sibling repo, or a non-repo
+    artifact (a published page, a scheduled task, a review verdict left on a PR).
+  If it is *still* empty after widening, say so as an explicit finding — "no files changed; this shift's
+  output was X" — never as a silently omitted section.
 - The current **TodoWrite** list — the authoritative in-progress/next-step state.
 - New/modified files of substance — Read or skim the ones central to the session (specs, code, docs).
 - Skim the conversation for: explicit **decisions**, **claims/numbers** asserted, **assumptions** taken, **questions answered**, and any **reversals** (things that changed mid-session).
@@ -75,7 +88,9 @@ verify-first standard.
 - **Key decisions** — each with its one-line rationale. These are the load-bearing outcomes.
 - **Claims, diagnoses & numbers** — each tagged per the provenance rule above: `[verified]` / `[derived]` / `[unverified]` / `[assumed]`. **Not just numbers** — a diagnosis ("X is the source of Y"), a mechanism ("this script reads Z"), and a state-of-the-world assertion are claims too, and are the ones that mislead. Never present an unverified figure or an inference as fact. Note *how* the verified ones were checked and *from what* the derived ones were inferred.
 - **Assumptions** — load-bearing ones flagged explicitly, with what would confirm/falsify each.
-- **Artifacts** — files created/modified (paths), one line each on what + why. Cite from `git status`.
+- **Artifacts** — files created/modified (paths), one line each on what + why. Cite from `git status` —
+  or, when the tree is clean because the work merged, from the widened evidence of Step 1 (the landed
+  commits and the files they touched). Say which, so "merged" never reads as "nothing happened".
 - **Reversals / corrections** — anything that changed during the session (a dropped claim, a re-decided choice), so the next session doesn't resurrect it.
 - **Open threads / unresolved** — questions still pending, deferred items, known gaps.
 
@@ -100,8 +115,33 @@ next session from "fixing" a safety property.
 ## Step 4 — Write the handoff to disk (durable + machine-readable)
 
 Write the full summary to a file so the next session can READ it rather than trust pasted prose:
-`<project-root>/.claude/handoffs/<UTC-timestamp>_<slug>.md` (create the dir; it's additive/safe).
-If not in a writable repo, skip and emit in-chat only. Never commit, never modify other files.
+`<primary-checkout>/.claude/handoffs/<UTC-timestamp>_<slug>.md` (create the dir; it's additive/safe).
+If not in a writable repo, skip and emit in-chat only.
+
+**Resolve `<primary-checkout>` explicitly — it is NOT necessarily where you are standing.** If this
+session is running in a linked git worktree, the obvious answers (`git rev-parse --show-toplevel`, or the
+cwd) give the *worktree's* root — and worktrees are routinely deleted when the task that created them
+ends, taking the one artifact this skill exists to produce with them. A handoff that dies with its
+worktree is worse than no handoff: the session reports success and leaves nothing behind. Resolve it:
+
+```bash
+git worktree list --porcelain | head -1 | sed 's/^worktree //'
+```
+
+The first entry is always the primary checkout. In an ordinary clone it returns that same checkout, so
+run it unconditionally rather than branching on whether you think you're in a worktree. (In a bare-repo
++ worktrees setup the first entry is the bare `.git` directory, marked `bare` in the output — that has
+no checkout to prefer, and it is the one location there that outlives every worktree, so it is still the
+right target. Don't be surprised by a path ending in `.git`.) **State the
+absolute path you wrote to in your closing message** — when the destination is not the directory the
+session has been working in, that is precisely what the operator needs to see, not a silent redirect.
+
+**On committing: don't — and you don't need to.** Durability here comes from *location*, not from
+committing: the primary checkout outlives worktree cleanup, so the read-only gate stands. Whether
+handoffs are *tracked* is the project's call and genuinely varies — some repos commit their handoff
+history, others gitignore `.claude/` wholesale, and a handoff written under an ignored path is still
+durable, just untracked. Report which you observed (`git check-ignore -v <path>`) and leave the decision
+to the project; a declared close-out contract (Step 4b) is the one thing that can authorize more.
 
 **Stamp a provenance marker as the very FIRST line of the handoff file** (before the H1), so a later automated
 review can identify the handoff THIS session wrote and never a concurrent sibling session's:
@@ -111,6 +151,24 @@ session). If you cannot determine it with confidence, write `<!-- review-loop:se
 review will then safely SKIP reconciling this handoff rather than risk editing the wrong one. (HTML comments
 are invisible in rendered markdown.) This is the only hook the `/review-loop` "Reconcile the session's handoff"
 step keys on.
+
+## Step 4b — Honour the project's close-out contract (only if it declares one)
+
+Some projects have a session **acquire** state at start that must be **released** at end: a claim on a
+shared desk or role, a lock, a lease, a "session N is live" marker. This skill cannot know what those
+are — but a claim left held by a session that no longer exists silently blocks the next one, and the
+symptom (a live-looking claim naming a dead session) points nowhere near the cause.
+
+Look for a project-declared contract at `<primary-checkout>/.claude/session-close-out.md`. **If it is
+absent, skip this step** — never invent close-out actions a project did not ask for. If present, read it
+and do what it says. **The writes it authorizes are a declared, scoped exception to the read-only gate**
+— that is the contract's entire purpose, and it is bounded by what that file names and nothing wider.
+
+**If you cannot complete it, say so loudly — that is the whole job here.** A close-out that silently
+half-ran is worse than one never attempted, because the project now believes it ran. Name the exact
+state left held, where it lives, and the command to clear it — in the handoff's **Open threads** section
+*and* in your closing message. An unreleasable claim the operator can see is a nuisance; one they
+cannot is a trap for the next session.
 
 ## Step 5 — Emit the continuation prompt (ONLY if work is mid-flight)
 
@@ -134,8 +192,12 @@ Present it in a fenced block, ready to paste. Keep it tight but complete — it 
 
 ## Safety + quality gate
 
-- **Read-only to the repo** except writing the one handoff file. No commits, no edits to other files.
-- Every cited artifact exists in `git status`/on disk; every load-bearing claim is tagged or evidenced.
+- **Read-only to the repo** except (a) writing the one handoff file and (b) whatever a declared close-out
+  contract authorizes (Step 4b). No commits. Absent such a contract, no edits to other files.
+- **The handoff went to the primary checkout**, not a worktree that is about to be deleted (Step 4), and
+  its absolute path is stated in the closing message.
+- Every cited artifact exists in `git status`/on disk **or in the widened evidence** of Step 1; every
+  load-bearing claim is tagged or evidenced. A clean working tree was investigated, not assumed empty.
 - **Re-read your own draft for untagged diagnoses.** Scan for the shapes that hide inferences: *"X is the
   source of Y" · "the reason is…" · "this reads the…" · "that's a bug/divergence/leftover" · "should be
   fixed"*. For each, ask: **did I check this, or did I conclude it?** Concluded → `[derived]` (or go

@@ -19,8 +19,13 @@ of session-end's "ground in artifacts": there you grounded the summary; here you
 
 ## Step 1 — Locate the handoff
 
-- Default: the newest file in `<project-root>/.claude/handoffs/` (prefer the full handoff doc; also read
-  its companion continuation-prompt file if one exists). Use `git rev-parse --show-toplevel` to find root.
+- Default: the newest file in `<primary-checkout>/.claude/handoffs/` (prefer the full handoff doc; also
+  read its companion continuation-prompt file if one exists).
+- **Resolve `<primary-checkout>` the same way `session-end` does when it writes** — with
+  `git worktree list --porcelain | head -1 | sed 's/^worktree //'`, *not* `git rev-parse --show-toplevel`.
+  In a linked worktree those differ: `--show-toplevel` returns the worktree's own root, so a pickup
+  running in a worktree would look in an empty directory and conclude no handoff exists while the real
+  one sits in the primary checkout. In an ordinary clone both return the same path.
 - Accept an optional arg: a path or a slug to pick a specific handoff.
 - **If none found:** say so plainly. Offer to (a) proceed cold from a stated goal, or (b) check
   `chat-history-search` for a prior session. Do not fabricate a handoff.

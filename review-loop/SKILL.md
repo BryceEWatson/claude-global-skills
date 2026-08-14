@@ -290,15 +290,21 @@ the session knowing exactly what remains to ship it.
 
 ## Reconcile the session's handoff (code mode; only the handoff THIS session wrote)
 
-`session-end` writes a handoff (`<toplevel>/.claude/handoffs/<ts>_<slug>.md`) BEFORE this review runs, so its
+`session-end` writes a handoff (`<primary-checkout>/.claude/handoffs/<ts>_<slug>.md`) BEFORE this review runs, so its
 review-status can be stale the instant the verdict lands ("not reviewed yet"), or a load-bearing finding can
 change the risk of its stated next-action. On a **terminal verdict**, reconcile it — run this AFTER "Leave a
 trail on the PR" and BEFORE "State archival", on the still-on-disk state. **Code mode only** (skip in
 plan/claim mode, as claim mode skips the PR trail). Self-gating: most runs wrote no handoff and this no-ops.
 
-1. **Attribute by POSITIVE authorship — never by recency.** Anchor to `git rev-parse --show-toplevel` of the
-   reviewed tree and operate ONLY on `<toplevel>/.claude/handoffs/`. From filenames + `git status` alone (no
-   body reads yet), find the handoff whose FIRST line is `<!-- review-loop:session:<id> -->` with `<id>` equal
+1. **Attribute by POSITIVE authorship — never by recency.** Anchor to the **primary checkout** —
+   `git worktree list --porcelain | head -1 | sed 's/^worktree //'`, which is where `session-end` writes so
+   the handoff survives worktree cleanup — and operate ONLY on `<primary-checkout>/.claude/handoffs/`. Do
+   NOT anchor to `git rev-parse --show-toplevel`: in a linked worktree that is the worktree's own root, and
+   this step would find zero handoffs and silently stop reconciling. **Do not gate on `git status` either**
+   — the handoff lives in the primary checkout, so a `git status` in the reviewed worktree will not list
+   it, and treating that as "no candidates" reproduces the same silent skip. List that directory directly.
+   From filenames + first lines alone (no full body reads yet), find the handoff whose FIRST line is
+   `<!-- review-loop:session:<id> -->` with `<id>` equal
    to THIS run's `--session-id`. If exactly zero match (incl. `unattributed`, or session-end stamped none) OR
    more than one matches → **skip silently**; this no-op is the expected outcome for most runs. NEVER fall back
    to "newest by mtime" — concurrent sibling sessions write into the same dir, and editing an unbound handoff
