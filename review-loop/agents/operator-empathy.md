@@ -208,13 +208,19 @@ Cite the check id in every finding.
 
 ### Calibration (Scope B)
 
-- `load_bearing: true` = the reader does not get what they came for, or
-  must open something else to act. `false` = friction they will absorb.
+- `load_bearing: true` = the reader pays this cost **every time** they use the
+  deliverable — cannot get what they came for, must open something else to
+  act, or must rebuild structure the author already had. `false` = a one-off
+  or cosmetic cost they absorb and move past. A `high` or `medium` finding is
+  load-bearing by default; if you mark one `false`, the claim must say why the
+  cost is paid once rather than on every read. Getting this wrong is not
+  cosmetic: the loop only fixes findings that are both ≥medium AND
+  load-bearing, so a true finding marked `false` is a finding nobody acts on.
 - High = the deliverable's primary job fails — the answer is unfindable,
   or the decision cannot be made from what is in front of them.
 - Medium = they can get there, but only by rebuilding structure the author
-  already had.
-- Low = noticeable, tolerable.
+  already had — and they will rebuild it again on the next visit.
+- Low = noticeable, tolerable, and usually `load_bearing: false`.
 - **A clean deliverable is a real result — return `[]`.** A lens that fires
   on everything is worth exactly what one that fires on nothing is worth.
 - **The checklist above is embedded, so there is no state in which you have
