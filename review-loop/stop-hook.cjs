@@ -216,8 +216,13 @@ function globToRegex(glob) {
 // `.claude/**` is session machinery. Widen per-project with
 // .claude/review-loop.deliverable-paths (one glob per line; REPLACES this set).
 // NOTE: globToRegex above maps `**` to `.*` without absorbing the slash that
-// follows it, so `reports/**/*.md` matches `reports/a/b.md` but NOT
-// `reports/b.md`. Both depths are listed wherever a top-level file is plausible.
+// follows it, so a `**/` prefix REQUIRES at least one directory: `reports/**/*.md`
+// matches `reports/a/b.md` but not `reports/b.md`, and `**/*-report.md` matches
+// `docs/x-report.md` but not a repo-root `x-report.md`. Every entry below that
+// could name a top-level file therefore lists both depths. (Fixing globToRegex
+// itself would retire the duplication, but it would also widen the existing plan
+// globs — `**/*-plan.md` has the same root-level hole — so that belongs in its
+// own change, not this one.)
 const DEFAULT_DELIVERABLE_GLOBS = [
   'reports/*.md',
   'reports/**/*.md',
@@ -229,8 +234,11 @@ const DEFAULT_DELIVERABLE_GLOBS = [
   'content/**/*.mdx',
   'src/content/**/*.md',
   'src/content/**/*.mdx',
+  '*-report.md',
   '**/*-report.md',
+  '*-brief.md',
   '**/*-brief.md',
+  '*-summary.md',
   '**/*-summary.md',
 ];
 

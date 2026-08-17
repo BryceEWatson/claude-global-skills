@@ -53,7 +53,7 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
   The Stop hook auto-selects the new mode, with precedence **plan > code >
   deliverable**: `.md`/`.mdx` under `reports/`, `research/`, `content/` or
-  `src/content/`, plus `**/*-report.md`, `**/*-brief.md`, `**/*-summary.md`,
+  `src/content/`, plus `*-report.md`, `*-brief.md`, `*-summary.md` at any depth,
   overridable per-project at `.claude/review-loop.deliverable-paths`. Those files
   previously matched nothing and exited at the nothing-reviewable gate, so this
   branch only *adds* review — a mixed code-and-deliverable diff still routes to

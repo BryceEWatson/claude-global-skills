@@ -38,8 +38,8 @@ Parse from the slash-command arguments:
      `.claude/review-loop.plan-paths`) → `--mode plan`;
   2. else any reviewable source file → `--mode code`;
   3. else any changed file matching the deliverable globs (`.md`/`.mdx` under
-     `reports/`, `research/`, `content/` or `src/content/`, plus `**/*-report.md`,
-     `**/*-brief.md`, `**/*-summary.md`, or a project override at
+     `reports/`, `research/`, `content/` or `src/content/`, plus `*-report.md`,
+     `*-brief.md`, `*-summary.md` at any depth, or a project override at
      `.claude/review-loop.deliverable-paths`) → `--mode deliverable`.
 
   Code outranks deliverable on purpose: the deliverable lens set does not review

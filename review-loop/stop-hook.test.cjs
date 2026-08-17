@@ -251,6 +251,30 @@ test('hook: top-level report under reports/ routes to --mode deliverable', () =>
   assert.ok(/--mode deliverable\b/.test(out.reason), `expected --mode deliverable, got: ${out.reason}`);
 });
 
+test('hook: repo-root *-report.md routes to --mode deliverable', () => {
+  const home = mkTempHome();
+  // The `**/` prefix requires at least one directory, so `**/*-report.md` alone
+  // misses a report sitting at the repo root. Both depths must be listed.
+  const repo = gitRepoWithStagedFile(home, 'weekly-report.md', '# weekly\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-root');
+  const r = runHook(home, { session_id: 'p-deliv-root', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out, 'expected a block decision');
+  assert.ok(/--mode deliverable\b/.test(out.reason), `expected --mode deliverable, got: ${out.reason}`);
+});
+
+test('hook: nested *-report.md still routes to --mode deliverable', () => {
+  const home = mkTempHome();
+  const repo = gitRepoWithStagedFile(home, 'docs/notes/weekly-report.md', '# weekly\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-nested');
+  const r = runHook(home, { session_id: 'p-deliv-nested', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out, 'expected a block decision');
+  assert.ok(/--mode deliverable\b/.test(out.reason), `expected --mode deliverable, got: ${out.reason}`);
+});
+
 test('hook: mixed code + deliverable diff routes to --mode code (code wins)', () => {
   const home = mkTempHome();
   // Deliverable lenses do not review source, so a stray content file must never
