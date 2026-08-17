@@ -125,15 +125,22 @@ Cite the check id in every finding.
   restatement of the request ("You asked me to…").
 - **D2 — an inventory rendered as prose.** Three or more parallel items
   that share two or more attributes (roles, states, colours, lanes, tiers,
-  options, schema fields, jobs, environments) are narrated in paragraphs,
-  or given one heading each, instead of one table whose columns are the
-  shared attributes — **and** answering one ordinary question about the set
-  makes the reader join material that is not adjacent, because it is split
-  across sections or interleaved with other content. An inventory already
-  sitting in one place, in order, one entry each, is NOT this finding: a
-  table would be tidier, and tidier is not a finding. Count the
-  inventories, the tables, and the distance between the pieces a reader
-  has to join.
+  options, schema fields, jobs, environments), where the set's attributes
+  are nowhere a reader can scan in one pass. Two shapes qualify, and the
+  test is where the **attributes** sit, not where the item names sit:
+  - narrated in sentences, so the reader extracts each cell from prose —
+    a paragraph with bolded run-in labels is still this shape; or
+  - split, so answering one cross-cutting question ("which lane may run
+    overnight?") means joining passages in different sections.
+
+  NOT this finding: the set is already a table or a definition list; each
+  item is one labelled entry carrying all of its own attributes; or the
+  only distant material sits below an `## Implementation detail` /
+  `## Appendix` stop-line, which is where it belongs. Count the
+  inventories, the tables, and the distance between the pieces to be
+  joined. **Three or more prose inventories and no tables at all is the
+  dominant-shape case — severity high**: the document *is* a set of
+  inventories and renders none of them as one.
 - **D3 — a list carries reasoning.** In `report` / `decision-ask` /
   `narrative`: a list used for reasoning, evidence, comparison, or
   narrative rather than a true enumeration (options, steps, ranked
