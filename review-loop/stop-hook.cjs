@@ -28,9 +28,10 @@
  *   - nothing-reviewable: only docs/handoffs/lockfiles/scratch/generated changed
  *   - diff-unchanged-since-last-review: this exact diff was already dispatched
  * Per-project overrides under <repo>/.claude/:
- *   review-loop.disabled    — opt out entirely
- *   review-loop.plan-paths  — globs that count as plan artifacts
- *   review-loop.code-exts   — extensions that count as reviewable code
+ *   review-loop.disabled          — opt out entirely
+ *   review-loop.plan-paths        — globs that count as plan artifacts
+ *   review-loop.code-exts         — extensions that count as reviewable code
+ *   review-loop.deliverable-paths — globs that count as reader-facing deliverables
  */
 
 'use strict';
@@ -206,8 +207,43 @@ function globToRegex(glob) {
   return new RegExp('^' + r + '$', 'i');
 }
 
-function loadPlanGlobs(cwd) {
-  const overridePath = path.join(cwd, '.claude', 'review-loop.plan-paths');
+// Reader-facing deliverables: FINISHED work a human is handed to read or use
+// (a report, a published content page, a brief). These changed nothing before —
+// they fell into `skip` below and the session got no review at all — so the
+// deliverable branch only ADDS review where there was none. Kept deliberately
+// narrow: `docs/**` is the plan lens's genre, README/CHANGELOG are project
+// furniture, `.html` is usually generated or a template, and anything under
+// `.claude/**` is session machinery. Widen per-project with
+// .claude/review-loop.deliverable-paths (one glob per line; REPLACES this set).
+// NOTE: globToRegex above maps `**` to `.*` without absorbing the slash that
+// follows it, so `reports/**/*.md` matches `reports/a/b.md` but NOT
+// `reports/b.md`. Both depths are listed wherever a top-level file is plausible.
+const DEFAULT_DELIVERABLE_GLOBS = [
+  'reports/*.md',
+  'reports/**/*.md',
+  'research/*.md',
+  'research/**/*.md',
+  'content/*.md',
+  'content/*.mdx',
+  'content/**/*.md',
+  'content/**/*.mdx',
+  'src/content/**/*.md',
+  'src/content/**/*.mdx',
+  '**/*-report.md',
+  '**/*-brief.md',
+  '**/*-summary.md',
+];
+
+// Session machinery is never a reader-facing deliverable. Enforced structurally
+// rather than by careful globbing, because the suffix globs above would
+// otherwise swallow a `session-end` handoff named `..._thing-summary.md` and
+// fire a review loop on every close-out. (The plan globs carry the same trap and
+// handle it by asking handoff slugs to avoid `-plan`/`-spec`/`-retrospective`;
+// this branch does not rely on that.)
+const DELIVERABLE_EXCLUDE = /(^|\/)\.claude\//;
+
+function loadGlobsWithOverride(cwd, overrideName, defaults) {
+  const overridePath = path.join(cwd, '.claude', overrideName);
   if (fs.existsSync(overridePath)) {
     try {
       const lines = fs.readFileSync(overridePath, 'utf8')
@@ -215,7 +251,15 @@ function loadPlanGlobs(cwd) {
       return lines.map(globToRegex);
     } catch (_) { /* fall through to defaults */ }
   }
-  return DEFAULT_PLAN_GLOBS.map(globToRegex);
+  return defaults.map(globToRegex);
+}
+
+function loadPlanGlobs(cwd) {
+  return loadGlobsWithOverride(cwd, 'review-loop.plan-paths', DEFAULT_PLAN_GLOBS);
+}
+
+function loadDeliverableGlobs(cwd) {
+  return loadGlobsWithOverride(cwd, 'review-loop.deliverable-paths', DEFAULT_DELIVERABLE_GLOBS);
 }
 
 // A session that changes ONLY non-code, non-plan files (handoffs, notes, logs,
@@ -247,15 +291,24 @@ function loadCodeExtensions(cwd) {
   return DEFAULT_CODE_EXTENSIONS;
 }
 
-function classifyDiff(files, planRegexes, codeExts) {
-  // 3-way split of the changed files:
-  //   - plan : matches a plan-artifact glob  -> review in plan mode
-  //   - code : reviewable source by extension -> review in code mode
-  //   - skip : everything else (docs, handoffs, lockfiles, scratch, generated)
-  // mode is 'plan' if any plan artifact changed (plan-tuned lenses include
-  // 'architecture', so a mixed plan+code diff routes to plan), else 'code' if
-  // any code file changed, else null (nothing reviewable — exit early).
-  const planFiles = [], codeFiles = [], skipFiles = [];
+function classifyDiff(files, planRegexes, codeExts, deliverableRegexes) {
+  // 4-way split of the changed files:
+  //   - plan        : matches a plan-artifact glob   -> review in plan mode
+  //   - code        : reviewable source by extension -> review in code mode
+  //   - deliverable : matches a deliverable glob     -> review in deliverable mode
+  //   - skip        : everything else (docs, handoffs, lockfiles, scratch, generated)
+  //
+  // Precedence: plan > code > deliverable.
+  //   plan first, because the plan-tuned lenses include 'architecture', so a
+  //   mixed plan+code diff routes to plan (pre-existing behavior);
+  //   code before deliverable, because the deliverable lens set does NOT review
+  //   source — letting a stray content file demote a code diff would silently
+  //   drop the code review. The cost of that ordering is the honest gap: a diff
+  //   that mixes code and a deliverable gets code lenses only, and the
+  //   deliverable rides along unreviewed (run /review-loop --mode deliverable
+  //   manually for those). Deliverable-only diffs previously matched nothing and
+  //   exited at Gate A, so this branch can only add review, never replace it.
+  const planFiles = [], codeFiles = [], deliverableFiles = [], skipFiles = [];
   for (const f of (files || [])) {
     // Normalize Windows paths to forward slashes for glob matching.
     const norm = f.replace(/\\/g, '/');
@@ -264,12 +317,15 @@ function classifyDiff(files, planRegexes, codeExts) {
     const dot = base.lastIndexOf('.');
     const ext = dot > 0 ? base.slice(dot).toLowerCase() : '';
     if ((ext && codeExts.has(ext)) || CODE_BASENAMES.has(base)) codeFiles.push(f);
-    else skipFiles.push(f);
+    else if (!DELIVERABLE_EXCLUDE.test(norm) && deliverableRegexes.some(re => re.test(norm))) {
+      deliverableFiles.push(f);
+    } else skipFiles.push(f);
   }
   let mode = null;
   if (planFiles.length) mode = 'plan';
   else if (codeFiles.length) mode = 'code';
-  return { mode, planFiles, codeFiles, skipFiles };
+  else if (deliverableFiles.length) mode = 'deliverable';
+  return { mode, planFiles, codeFiles, deliverableFiles, skipFiles };
 }
 
 function readTranscriptTail(transcriptPath, maxBytes = 200000) {
@@ -449,7 +505,9 @@ function main() {
   const files = changedFiles.concat(untracked.filter(f => !changedFiles.includes(f)));
   const planRegexes = loadPlanGlobs(cwd);
   const codeExts = loadCodeExtensions(cwd);
-  const { mode, planFiles, codeFiles, skipFiles } = classifyDiff(files, planRegexes, codeExts);
+  const deliverableRegexes = loadDeliverableGlobs(cwd);
+  const { mode, planFiles, codeFiles, deliverableFiles, skipFiles } =
+    classifyDiff(files, planRegexes, codeExts, deliverableRegexes);
 
   // Gate A — nothing reviewable changed (only docs / handoffs / lockfiles /
   // scratch / generated). The most common low-value session; skip it.
@@ -487,7 +545,7 @@ function main() {
     } catch (_) { /* best-effort */ }
   }
   const iteration = 0; // first invocation; skill will increment internally.
-  const reviewable = planFiles.length + codeFiles.length;
+  const reviewable = planFiles.length + codeFiles.length + deliverableFiles.length;
   const skillCommand = `/review-loop --auto --session-id ${sessionId} --iteration ${iteration} --mode ${mode}`;
   logLine(`block: invoke skill iter=${iteration} mode=${mode} files=${files.length} reviewable=${reviewable} skipped=${skipFiles.length} sha=${diffSha ? diffSha.slice(0, 8) : 'n/a'}`);
   emitBlock({

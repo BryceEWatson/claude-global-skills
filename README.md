@@ -39,7 +39,7 @@ after copying. See each skill's section below.
 
 | Skill | What it does |
 |---|---|
-| [`review-loop`](review-loop/) | Dispatches a multi-agent review team over your session's diff, runs an execution-grounded lint/test/build check, validates each finding through a falsifier stage, and posts a commit-pinned verdict on the PR. Ships a Stop-hook + installer. |
+| [`review-loop`](review-loop/) | Dispatches a multi-agent review team over your session's diff, runs an execution-grounded lint/test/build check, validates each finding through a falsifier stage, and posts a commit-pinned verdict on the PR. Four lens sets by artifact type: code, plans, analytical claims, and finished deliverables (whether the human it's handed to can actually use it). Ships a Stop-hook + installer. |
 | [`gemini-image`](gemini-image/) | Generate and edit images via Google's Gemini API from one zero-dependency Python CLI — reference-image input, multi-image output, safety-block diagnostics, best-available-model selection. |
 | [`chat-history-search`](chat-history-search/) | Exhaustively search your local Claude history across both corpora (Claude Code CLI + Cowork/Desktop) — knows every log location and the false-positive gotchas (task-notifications, TodoWrite items, tool results) that trip up naive grep. |
 | [`pattern-retrospective`](pattern-retrospective/) | Mine your transcripts for recurring patterns with real rigor: audit-the-target-first discipline, streaming JSONL parse, 5-tuple extraction with provenance, self-falsification, and Krippendorff-α inter-rater checks. |

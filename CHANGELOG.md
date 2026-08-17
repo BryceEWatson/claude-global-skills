@@ -11,6 +11,44 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Added
 
+- **`review-loop` gains `--mode deliverable` — a review of finished work for
+  whether its reader can use it.** Every lens in the loop checked an artifact
+  against its specification; nothing checked it against the person it was handed
+  to. The one lens that exists for that question, `operator-empathy`, opened with
+  "running … in `--mode plan`" and so only ever saw forward-looking plans. It
+  could catch "this plan adds a dashboard that increases your workload" and never
+  "this finished page is unusable."
+
+  The lens now carries two scopes. Scope A (plan) is unchanged, byte-for-byte
+  apart from its heading level. Scope B (deliverable) assigns the artifact a
+  genre — `report` / `reference` / `decision-ask` / `narrative` /
+  `machine-output` — and runs an eleven-item checklist against it: answer-first,
+  inventories rendered as prose instead of tables, lists carrying reasoning,
+  heading shape versus genre, a decision that links to its evidence instead of
+  carrying it, a menu where a recommendation belongs, terms used before they are
+  introduced, code detail in the reading path, density, rigor apparatus in the
+  reading path, and edit-meta. The genre gate is what keeps it quiet: a
+  reference page is *supposed* to be dense with tables, so the density and list
+  checks do not apply to one.
+
+  The checklist is **embedded, not read at runtime**. This skill installs on
+  machines with no operator instruction files at all, where a runtime-loaded
+  checklist would load nothing and the lens would return `[]` — indistinguishable
+  from a clean deliverable. A project can still point the lens at its own
+  standard via `.claude/review-loop.deliverable-standard`, whose rules become
+  additional checks and win on conflict; if that declared standard fails to load,
+  the lens must emit a `checklist-unavailable` finding rather than return `[]`.
+
+  The Stop hook auto-selects the new mode, with precedence **plan > code >
+  deliverable**: `.md`/`.mdx` under `reports/`, `research/`, `content/` or
+  `src/content/`, plus `**/*-report.md`, `**/*-brief.md`, `**/*-summary.md`,
+  overridable per-project at `.claude/review-loop.deliverable-paths`. Those files
+  previously matched nothing and exited at the nothing-reviewable gate, so this
+  branch only *adds* review — a mixed code-and-deliverable diff still routes to
+  code, and the deliverable rides along unreviewed until someone invokes the mode
+  by hand. Anything under `.claude/` is excluded structurally, so a `session-end`
+  handoff named `…_thing-summary.md` cannot fire a review loop.
+
 - **`sync.py --capture` now refuses to pull private content into the repo.**
   Capture is the one direction that can leak: it copies the live tree into a
   public repo, and the live tree accumulates operator-private detail (absolute
