@@ -127,8 +127,13 @@ Cite the check id in every finding.
   that share two or more attributes (roles, states, colours, lanes, tiers,
   options, schema fields, jobs, environments) are narrated in paragraphs,
   or given one heading each, instead of one table whose columns are the
-  shared attributes. Most expensive on `reference`: the reader rebuilds
-  the table by hand on every visit. Count the inventories and the tables.
+  shared attributes — **and** answering one ordinary question about the set
+  makes the reader join material that is not adjacent, because it is split
+  across sections or interleaved with other content. An inventory already
+  sitting in one place, in order, one entry each, is NOT this finding: a
+  table would be tidier, and tidier is not a finding. Count the
+  inventories, the tables, and the distance between the pieces a reader
+  has to join.
 - **D3 — a list carries reasoning.** In `report` / `decision-ask` /
   `narrative`: a list used for reasoning, evidence, comparison, or
   narrative rather than a true enumeration (options, steps, ranked
@@ -216,11 +221,21 @@ Cite the check id in every finding.
   cost is paid once rather than on every read. Getting this wrong is not
   cosmetic: the loop only fixes findings that are both ≥medium AND
   load-bearing, so a true finding marked `false` is a finding nobody acts on.
-- High = the deliverable's primary job fails — the answer is unfindable,
-  or the decision cannot be made from what is in front of them.
-- Medium = they can get there, but only by rebuilding structure the author
-  already had — and they will rebuild it again on the next visit.
-- Low = noticeable, tolerable, and usually `load_bearing: false`.
+- **Severity is blast radius, not truthfulness.** A check can fire perfectly
+  truthfully on a deliverable that does its job. Before assigning severity,
+  count the defect against the artifact and put the ratio in the claim:
+  - High = the deliverable's primary job fails — the answer is unfindable, the
+    decision cannot be made from what is in front of them, or the dominant
+    content shape is wrong across the whole artifact ("6 inventories, 0
+    tables").
+  - Medium = the reader meets it on the main path and pays again on every
+    visit, but still gets what they came for.
+  - Low = it fires on one term, one aside, or a minority of sections ("2 of 9
+    headings"). True, and not worth an author's re-read.
+- **If everything you found is Low, return `[]`.** The sibling lenses say
+  don't pad with low-severity items; here it is stricter, because any
+  well-made document trips some check somewhere. Firing on every artifact and
+  firing on none are worth the same.
 - **A clean deliverable is a real result — return `[]`.** A lens that fires
   on everything is worth exactly what one that fires on nothing is worth.
 - **The checklist above is embedded, so there is no state in which you have
