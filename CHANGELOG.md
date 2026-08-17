@@ -11,6 +11,61 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Added
 
+- **`review-loop` gains `--mode deliverable` — a review of finished work for
+  whether its reader can use it.** Every lens in the loop checked an artifact
+  against its specification; nothing checked it against the person it was handed
+  to. The one lens that exists for that question, `operator-empathy`, opened with
+  "running … in `--mode plan`" and so only ever saw forward-looking plans. It
+  could catch "this plan adds a dashboard that increases your workload" and never
+  "this finished page is unusable."
+
+  The lens now carries two scopes. Scope A's checks and calibration text carry
+  over unchanged — verified identical across all 58 non-blank lines of its body,
+  re-leveled one heading deeper and moved above Scope B — while its finding
+  schema gains two fields, `genre` and `check`, which Scope A emits as null.
+  Scope B (deliverable) assigns the artifact a
+  genre — `report` / `reference` / `decision-ask` / `narrative` /
+  `machine-output` — and runs an eleven-item checklist against it: answer-first,
+  inventories rendered as prose instead of tables, lists carrying reasoning,
+  heading shape versus genre, a decision that links to its evidence instead of
+  carrying it, a menu where a recommendation belongs, terms used before they are
+  introduced, code detail in the reading path, density, rigor apparatus in the
+  reading path, and edit-meta.
+
+  Three mechanics keep it quiet. Two of the three came out of exercising the
+  lens rather than from the original design — a first cut fired on all three
+  control documents tried, producing eight true-but-minor findings a reader
+  could not tell apart from a page nobody can use. The genre gate was there from
+  the start; the other two were not. First, the genre gate: a `reference` page
+  is *supposed* to be dense
+  with tables, so the density and list checks do not apply to one. Second,
+  severity is blast radius rather than truthfulness, and the ratio has to appear
+  in the finding — "6 inventories, 0 tables" is high, "2 of 9 headings" is low —
+  with an all-low result returning `[]`. Third, the inventory check only fires
+  when the reader has to **join material that is not adjacent**; an inventory
+  already sitting in one place, in order, is not a finding, because a table
+  being tidier is not a defect. Severity and `load_bearing` are also coupled
+  now, since the loop only fixes findings that are both ≥medium and
+  load-bearing — a true finding marked otherwise is one nobody acts on.
+
+  The checklist is **embedded, not read at runtime**. This skill installs on
+  machines with no operator instruction files at all, where a runtime-loaded
+  checklist would load nothing and the lens would return `[]` — indistinguishable
+  from a clean deliverable. A project can still point the lens at its own
+  standard via `.claude/review-loop.deliverable-standard`, whose rules become
+  additional checks and win on conflict; if that declared standard fails to load,
+  the lens must emit a `checklist-unavailable` finding rather than return `[]`.
+
+  The Stop hook auto-selects the new mode, with precedence **plan > code >
+  deliverable**: `.md`/`.mdx` under `reports/`, `research/`, `content/` or
+  `src/content/`, plus `*-report.md`, `*-brief.md`, `*-summary.md` at any depth,
+  overridable per-project at `.claude/review-loop.deliverable-paths`. Those files
+  previously matched nothing and exited at the nothing-reviewable gate, so this
+  branch only *adds* review — a mixed code-and-deliverable diff still routes to
+  code, and the deliverable rides along unreviewed until someone invokes the mode
+  by hand. Anything under `.claude/` is excluded structurally, so a `session-end`
+  handoff named `…_thing-summary.md` cannot fire a review loop.
+
 - **`sync.py --capture` now refuses to pull private content into the repo.**
   Capture is the one direction that can leak: it copies the live tree into a
   public repo, and the live tree accumulates operator-private detail (absolute

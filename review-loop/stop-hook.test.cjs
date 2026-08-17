@@ -209,13 +209,203 @@ test('hook: empty plan-paths override + .md is nothing-reviewable (no block)', (
   const home = mkTempHome();
   // -plan.md normally => plan. Empty override => no plan globs. A .md is not a
   // code extension, so nothing reviewable changed => the hook must NOT fire.
-  const repo = gitRepoWithStagedFile(home, 'reports/x-plan.md', '# x\n');
+  // Path is under notes/ rather than reports/ so it also misses the deliverable
+  // globs — this test is about plan-glob override semantics, not routing.
+  const repo = gitRepoWithStagedFile(home, 'notes/x-plan.md', '# x\n');
   fs.mkdirSync(path.join(repo, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(repo, '.claude', 'review-loop.plan-paths'), '# empty\n');
   const transcript = fakeTranscriptWithEdit(home, 'p-empty-override');
   const r = runHook(home, { session_id: 'p-empty-override', cwd: repo, transcript_path: transcript });
   assert.equal(r.status, 0);
   assert.equal(parseStdout(r), null, 'a non-plan .md is not reviewable code => no block');
+});
+
+// -----------------------------------------------------------------------
+// Deliverable-mode routing (--mode deliverable; precedence plan > code > deliverable)
+// -----------------------------------------------------------------------
+
+test('hook: deliverable-only diff routes to --mode deliverable', () => {
+  const home = mkTempHome();
+  // A published content page: previously nothing-reviewable (a .md that is
+  // neither a plan artifact nor code), so this can only ADD a review.
+  const repo = gitRepoWithStagedFile(home, 'src/content/projects/thing/index.md', '# thing\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv');
+  const r = runHook(home, { session_id: 'p-deliv', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out, 'expected a block decision');
+  assert.equal(out.decision, 'block');
+  assert.ok(/--mode deliverable\b/.test(out.reason), `expected --mode deliverable, got: ${out.reason}`);
+});
+
+test('hook: top-level report under reports/ routes to --mode deliverable', () => {
+  const home = mkTempHome();
+  // Guards the glob depth trap: `reports/**/*.md` alone would NOT match a file
+  // sitting directly in reports/, because `**` does not absorb its slash.
+  const repo = gitRepoWithStagedFile(home, 'reports/weekly.md', '# weekly\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-flat');
+  const r = runHook(home, { session_id: 'p-deliv-flat', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out, 'expected a block decision');
+  assert.ok(/--mode deliverable\b/.test(out.reason), `expected --mode deliverable, got: ${out.reason}`);
+});
+
+test('hook: repo-root *-report.md routes to --mode deliverable', () => {
+  const home = mkTempHome();
+  // The `**/` prefix requires at least one directory, so `**/*-report.md` alone
+  // misses a report sitting at the repo root. Both depths must be listed.
+  const repo = gitRepoWithStagedFile(home, 'weekly-report.md', '# weekly\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-root');
+  const r = runHook(home, { session_id: 'p-deliv-root', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out, 'expected a block decision');
+  assert.ok(/--mode deliverable\b/.test(out.reason), `expected --mode deliverable, got: ${out.reason}`);
+});
+
+test('hook: nested *-report.md still routes to --mode deliverable', () => {
+  const home = mkTempHome();
+  const repo = gitRepoWithStagedFile(home, 'docs/notes/weekly-report.md', '# weekly\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-nested');
+  const r = runHook(home, { session_id: 'p-deliv-nested', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out, 'expected a block decision');
+  assert.ok(/--mode deliverable\b/.test(out.reason), `expected --mode deliverable, got: ${out.reason}`);
+});
+
+test('hook: mixed code + deliverable diff routes to --mode code (code wins)', () => {
+  const home = mkTempHome();
+  // Deliverable lenses do not review source, so a stray content file must never
+  // demote a code diff — that would silently drop the code review.
+  const repo = gitRepoWithStagedFile(home, 'src/foo.ts', 'export const x = 1;\n');
+  fs.mkdirSync(path.join(repo, 'reports'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'reports', 'weekly.md'), '# weekly\n');
+  spawnSync('git', ['-C', repo, 'add', '.']);
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-mixed');
+  const r = runHook(home, { session_id: 'p-deliv-mixed', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out, 'expected a block decision');
+  assert.ok(/--mode code\b/.test(out.reason), `mixed code+deliverable should be code, got: ${out.reason}`);
+});
+
+test('hook: mixed plan + deliverable diff routes to --mode plan (plan still wins)', () => {
+  const home = mkTempHome();
+  const repo = gitRepoWithStagedFile(home, 'reports/weekly.md', '# weekly\n');
+  fs.writeFileSync(path.join(repo, 'reports', 'thing-spec.md'), '# spec\n');
+  spawnSync('git', ['-C', repo, 'add', '.']);
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-plan');
+  const r = runHook(home, { session_id: 'p-deliv-plan', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out, 'expected a block decision');
+  assert.ok(/--mode plan\b/.test(out.reason), `mixed plan+deliverable should be plan, got: ${out.reason}`);
+});
+
+test('hook: deliverable-paths override widens what counts as a deliverable', () => {
+  const home = mkTempHome();
+  // Neither plan, code, nor a default deliverable — normally nothing-reviewable.
+  const repo = gitRepoWithStagedFile(home, 'pages/about.md', '# about\n');
+  fs.mkdirSync(path.join(repo, '.claude'), { recursive: true });
+  fs.writeFileSync(
+    path.join(repo, '.claude', 'review-loop.deliverable-paths'),
+    '# project overrides\npages/*.md\n',
+  );
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-override');
+  const r = runHook(home, { session_id: 'p-deliv-override', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out, 'expected a block decision');
+  assert.ok(/--mode deliverable\b/.test(out.reason), `override should classify as deliverable, got: ${out.reason}`);
+});
+
+test('hook: empty deliverable-paths override turns the deliverable branch off', () => {
+  const home = mkTempHome();
+  // The override REPLACES the default set, so an empty file opts a project out
+  // of deliverable review entirely and restores the pre-existing skip.
+  const repo = gitRepoWithStagedFile(home, 'reports/weekly.md', '# weekly\n');
+  fs.mkdirSync(path.join(repo, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.claude', 'review-loop.deliverable-paths'), '# empty\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-off');
+  const r = runHook(home, { session_id: 'p-deliv-off', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  assert.equal(parseStdout(r), null, 'empty deliverable override => nothing reviewable => no block');
+});
+
+test('hook: .mdx under reports/ routes to --mode deliverable', () => {
+  const home = mkTempHome();
+  // Both docs promise .md/.mdx across all four deliverable directories.
+  const repo = gitRepoWithStagedFile(home, 'reports/2026/q3.mdx', '# q3\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-mdx');
+  const r = runHook(home, { session_id: 'p-deliv-mdx', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out, 'expected a block decision');
+  assert.ok(/--mode deliverable\b/.test(out.reason), `expected --mode deliverable, got: ${out.reason}`);
+});
+
+test('hook: top-level src/content page routes to --mode deliverable', () => {
+  const home = mkTempHome();
+  const repo = gitRepoWithStagedFile(home, 'src/content/about.md', '# about\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-srctop');
+  const r = runHook(home, { session_id: 'p-deliv-srctop', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out, 'expected a block decision');
+  assert.ok(/--mode deliverable\b/.test(out.reason), `expected --mode deliverable, got: ${out.reason}`);
+});
+
+test('hook: an override cannot re-include .claude/ as a deliverable', () => {
+  const home = mkTempHome();
+  // The exclusion outranks the override — session machinery is never a
+  // deliverable, however the project globs it.
+  const repo = gitRepoWithStagedFile(home, '.claude/reports/x.md', '# x\n');
+  fs.writeFileSync(
+    path.join(repo, '.claude', 'review-loop.deliverable-paths'),
+    '.claude/**/*.md\n',
+  );
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-reinclude');
+  const r = runHook(home, { session_id: 'p-deliv-reinclude', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  assert.equal(parseStdout(r), null, '.claude/ stays excluded even when a glob names it');
+});
+
+test('hook: unreadable deliverable override fails closed, not open', () => {
+  const home = mkTempHome();
+  // A directory where the override file should be => readFileSync throws
+  // (EISDIR). Falling back to the full default set would turn a deliberate
+  // opt-out into an opt-in, so the deliverable set must come back empty.
+  const repo = gitRepoWithStagedFile(home, 'reports/weekly.md', '# weekly\n');
+  fs.mkdirSync(path.join(repo, '.claude', 'review-loop.deliverable-paths'), { recursive: true });
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-unreadable');
+  const r = runHook(home, { session_id: 'p-deliv-unreadable', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  assert.equal(parseStdout(r), null, 'unreadable override must not restore the default globs');
+});
+
+test('hook: handoffs and scratch are still not deliverables', () => {
+  const home = mkTempHome();
+  // Session machinery under .claude/ must stay out of the deliverable globs, or
+  // every session-end handoff would fire a review loop.
+  const repo = gitRepoWithStagedFile(home, '.claude/handoffs/2026-08-16_thing-summary.md', '# handoff\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-handoff');
+  const r = runHook(home, { session_id: 'p-deliv-handoff', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  assert.equal(parseStdout(r), null, 'a handoff is not a reader-facing deliverable => no block');
+});
+
+test('hook: the .claude/ exclusion is case-insensitive', () => {
+  const home = mkTempHome();
+  // globToRegex compiles with the `i` flag, so `**/*-summary.md` matches any
+  // casing; the exclusion has to match the same way or a `.Claude/` directory
+  // slips a handoff through as a deliverable.
+  const repo = gitRepoWithStagedFile(home, '.Claude/handoffs/2026-08-16_thing-summary.md', '# handoff\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-case');
+  const r = runHook(home, { session_id: 'p-deliv-case', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  assert.equal(parseStdout(r), null, '.Claude/ must be excluded exactly like .claude/');
 });
 
 // -----------------------------------------------------------------------
