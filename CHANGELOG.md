@@ -27,9 +27,21 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   heading shape versus genre, a decision that links to its evidence instead of
   carrying it, a menu where a recommendation belongs, terms used before they are
   introduced, code detail in the reading path, density, rigor apparatus in the
-  reading path, and edit-meta. The genre gate is what keeps it quiet: a
-  reference page is *supposed* to be dense with tables, so the density and list
-  checks do not apply to one.
+  reading path, and edit-meta.
+
+  Three mechanics keep it quiet, and all three came from exercising it rather
+  than from theory — a first cut fired on every control document tried, with
+  true-but-minor findings that a reader could not tell apart from a page nobody
+  can use. First, the genre gate: a `reference` page is *supposed* to be dense
+  with tables, so the density and list checks do not apply to one. Second,
+  severity is blast radius rather than truthfulness, and the ratio has to appear
+  in the finding — "6 inventories, 0 tables" is high, "2 of 9 headings" is low —
+  with an all-low result returning `[]`. Third, the inventory check only fires
+  when the reader has to **join material that is not adjacent**; an inventory
+  already sitting in one place, in order, is not a finding, because a table
+  being tidier is not a defect. Severity and `load_bearing` are also coupled
+  now, since the loop only fixes findings that are both ≥medium and
+  load-bearing — a true finding marked otherwise is one nobody acts on.
 
   The checklist is **embedded, not read at runtime**. This skill installs on
   machines with no operator instruction files at all, where a runtime-loaded
