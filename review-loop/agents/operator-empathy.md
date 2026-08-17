@@ -138,9 +138,12 @@ Cite the check id in every finding.
   only distant material sits below an `## Implementation detail` /
   `## Appendix` stop-line, which is where it belongs. Count the
   inventories, the tables, and the distance between the pieces to be
-  joined. **Three or more prose inventories and no tables at all is the
-  dominant-shape case — severity high**: the document *is* a set of
-  inventories and renders none of them as one.
+  joined. **The dominant-shape case is a proportion, not a count**: three or
+  more prose-shaped inventories AND prose-shaped ≥ 3/4 of all the inventories
+  in the document is severity high — the document *is* a set of inventories and
+  renders almost none of them as one. State the denominator ("6 of 7
+  inventories in prose"), not a bare pair of counts, so the same finding on a
+  40-section report and on a 600-word page do not score alike.
 - **D3 — a list carries reasoning.** In `report` / `decision-ask` /
   `narrative`: a list used for reasoning, evidence, comparison, or
   narrative rather than a true enumeration (options, steps, ranked
@@ -179,8 +182,13 @@ Cite the check id in every finding.
   fewer than ~250 words per section heading on average, more than 8
   sections, headings deeper than `###`, average sentence over 20 words,
   more than one sentence in four over 25 words, or body paragraphs
-  routinely over 5 sentences. These numbers are calibration, not doctrine
-  — cite the value you actually counted.
+  routinely over 5 sentences. **Sample-size floors, because these are rates
+  and a small denominator makes them noise:** the words-per-heading rate only
+  applies at ≥6 headings and ≥1,500 words; the long-sentence rate only at ≥20
+  sentences. Below those, say nothing — a 300-word page with two headings is
+  not a density defect. Report the denominator with the rate ("one heading per
+  120 words across 11 headings"). The numbers themselves are calibration, not
+  doctrine — cite the value you actually counted.
 - **D10 — rigor apparatus in the reading path.** Bracketed provenance tags
   (`[Measured]`, `[Derived]`, `[Assumed]`, `[Judgment]`), per-claim
   citations, confidence percentages, method narration, or per-sentence
@@ -246,11 +254,15 @@ Cite the check id in every finding.
 - **A clean deliverable is a real result — return `[]`.** A lens that fires
   on everything is worth exactly what one that fires on nothing is worth.
 - **The checklist above is embedded, so there is no state in which you have
-  none.** If the dispatch pointed you at a project standard (a path named
-  in `.claude/review-loop.deliverable-standard`, or a house standard named
-  in the operator's `~/.claude/CLAUDE.md`) and you could not read it, emit
-  one finding with category `checklist-unavailable` naming the path — never
-  return `[]` on a run whose declared standard failed to load.
+  none.** A project may add to it: `.claude/review-loop.deliverable-standard`
+  is a **pointer file** — one line holding the path of that project's own
+  standard (e.g. `docs/REPORT-READABILITY-STANDARD.md`), so a repo names its
+  standard where it already lives instead of copying it. If that pointer, or
+  the document it names, could not be read, emit one finding with category
+  `checklist-unavailable` naming the path — never return `[]` on a run whose
+  declared standard failed to load. This is the one finding that needs no
+  measured count, and it is exempt from falsification and the drift-guard: it
+  reports a load failure, not a claim about the artifact.
 - A readable project standard supplies **additional** checks, and where it
   conflicts with D1–D11 the project standard wins. Name the source in
   `check` (`D2`, or `standard:R7`).

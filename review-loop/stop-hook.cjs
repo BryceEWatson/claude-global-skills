@@ -225,13 +225,19 @@ function globToRegex(glob) {
 // own change, not this one.)
 const DEFAULT_DELIVERABLE_GLOBS = [
   'reports/*.md',
+  'reports/*.mdx',
   'reports/**/*.md',
+  'reports/**/*.mdx',
   'research/*.md',
+  'research/*.mdx',
   'research/**/*.md',
+  'research/**/*.mdx',
   'content/*.md',
   'content/*.mdx',
   'content/**/*.md',
   'content/**/*.mdx',
+  'src/content/*.md',
+  'src/content/*.mdx',
   'src/content/**/*.md',
   'src/content/**/*.mdx',
   '*-report.md',
@@ -247,17 +253,32 @@ const DEFAULT_DELIVERABLE_GLOBS = [
 // otherwise swallow a `session-end` handoff named `..._thing-summary.md` and
 // fire a review loop on every close-out. (The plan globs carry the same trap and
 // handle it by asking handoff slugs to avoid `-plan`/`-spec`/`-retrospective`;
-// this branch does not rely on that.)
-const DELIVERABLE_EXCLUDE = /(^|\/)\.claude\//;
+// this branch does not rely on that.) Case-insensitive to match globToRegex,
+// which compiles every glob with the `i` flag — otherwise a `.Claude/` directory
+// on a case-insensitive filesystem slips past the exclusion and matches a glob.
+const DELIVERABLE_EXCLUDE = /(^|\/)\.claude\//i;
 
-function loadGlobsWithOverride(cwd, overrideName, defaults) {
+// An override that exists but cannot be read is LOGGED rather than swallowed.
+// The old bare `catch (_)` silently fell back to the full default set, which
+// turns a deliberate opt-out (an empty override file) into a full opt-in the
+// moment that file becomes unreadable — a directory of the same name, a locked
+// file, a permissions change — and hook.log showed an ordinary dispatch with no
+// trace of why. `failClosedOnError` is for a set whose failure mode is FIRING a
+// review rather than skipping one: there an unreadable override yields an empty
+// set, so a broken opt-out cannot become a surprise opt-in.
+function loadGlobsWithOverride(cwd, overrideName, defaults, failClosedOnError = false) {
   const overridePath = path.join(cwd, '.claude', overrideName);
   if (fs.existsSync(overridePath)) {
     try {
       const lines = fs.readFileSync(overridePath, 'utf8')
         .split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith('#'));
       return lines.map(globToRegex);
-    } catch (_) { /* fall through to defaults */ }
+    } catch (e) {
+      const code = (e && e.code) ? e.code : 'unknown';
+      const fallback = failClosedOnError ? 'using empty set' : 'using defaults';
+      logLine(`override-unreadable: ${overridePath} (${code}) — ${fallback}`);
+      if (failClosedOnError) return [];
+    }
   }
   return defaults.map(globToRegex);
 }
@@ -267,7 +288,9 @@ function loadPlanGlobs(cwd) {
 }
 
 function loadDeliverableGlobs(cwd) {
-  return loadGlobsWithOverride(cwd, 'review-loop.deliverable-paths', DEFAULT_DELIVERABLE_GLOBS);
+  return loadGlobsWithOverride(
+    cwd, 'review-loop.deliverable-paths', DEFAULT_DELIVERABLE_GLOBS, true,
+  );
 }
 
 // A session that changes ONLY non-code, non-plan files (handoffs, notes, logs,
@@ -325,8 +348,15 @@ function classifyDiff(files, planRegexes, codeExts, deliverableRegexes) {
     const dot = base.lastIndexOf('.');
     const ext = dot > 0 ? base.slice(dot).toLowerCase() : '';
     if ((ext && codeExts.has(ext)) || CODE_BASENAMES.has(base)) codeFiles.push(f);
-    else if (!DELIVERABLE_EXCLUDE.test(norm) && deliverableRegexes.some(re => re.test(norm))) {
-      deliverableFiles.push(f);
+    else if (deliverableRegexes.some(re => re.test(norm))) {
+      // The `.claude/` exclusion is unconditional — it outranks the project
+      // override too, so a glob cannot re-include session machinery. Log when it
+      // suppresses a file that a glob DID match, so the no-op is visible rather
+      // than mysterious to whoever wrote that glob.
+      if (DELIVERABLE_EXCLUDE.test(norm)) {
+        logLine(`deliverable-excluded: ${norm} (.claude/ is never a deliverable)`);
+        skipFiles.push(f);
+      } else deliverableFiles.push(f);
     } else skipFiles.push(f);
   }
   let mode = null;

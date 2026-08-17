@@ -115,7 +115,12 @@ analysis lives in a file tied to an open PR.
 **Deliverable mode:** the artifact is the **whole finished deliverable**, not its
 diff — a reader meets the entire page, not the lines that changed. Run the git
 commands to identify which deliverable files changed, then read each one in full
-and pass that full text to the reviewer. If the deliverable was passed inline
+and pass that full text to the reviewer. **Read `.claude/review-loop.deliverable-paths`
+first if it exists: it REPLACES the default globs listed above, so in an
+override project the built-in list is wrong by construction and matching
+against it would find nothing.** If the matched set comes out empty, say so
+explicitly — an empty artifact set is a routing fault to report, never a
+`review-clean`. If the deliverable was passed inline
 (no file — a decision presented in chat, a page reachable only by URL), skip the
 git commands as claim mode does and use the artifact text as the `diff_sha`
 equivalent and the Step 6 drift-guard reference. When the deliverable renders
@@ -203,21 +208,24 @@ which is already covered elsewhere and is not the gap this mode exists to close.
 Do NOT load `execution-grounded.md` (nothing to run), `ship-readiness.md`,
 `simplicity.md`, or `statistical-rigor.md` (code-shape lenses on prose).
 
-Because it is a single lens, treat its `[]` as meaningful rather than as thin
-coverage: the lens is instructed to return `[]` on a clean deliverable and to
-emit an explicit `checklist-unavailable` finding if a declared project standard
-failed to load, so a silent empty result cannot mean "the checklist never ran".
+Read its `[]` for exactly what it buys, and no more: the checklist is embedded
+in the lens, so an empty result means the checks were present and found nothing.
+It is **not** corroborated by a second lens, and the lens's false-negative rate
+is unmeasured — an over-tightened check can return `[]` on a deliverable that
+genuinely fails, which happened during this mode's own calibration. The one
+failure it does rule out is a declared project standard silently failing to
+load, which must surface as a `checklist-unavailable` finding instead.
 
 #### Dispatch (all modes)
 
 For each enabled agent file, dispatch a `Task` (subagent_type: `general-purpose`) with:
 - The agent file's full body as the system instruction
-- The diff + file list + branch name (plan mode: include the full content of changed plan files, not just the diff — review needs the surrounding doc context; **claim mode: include the verbatim claims under review + pointers to the primary sources/transcripts/data they cite, and instruct each reviewer to read those sources directly — its job is to break the claim against ground truth, not critique prose**; **deliverable mode: include the FULL text of each changed deliverable (never only the diff), the rendered form where one exists, and the path of any project deliverable standard at `.claude/review-loop.deliverable-standard` so the lens can load it as additional checks**)
+- The diff + file list + branch name (plan mode: include the full content of changed plan files, not just the diff — review needs the surrounding doc context; **claim mode: include the verbatim claims under review + pointers to the primary sources/transcripts/data they cite, and instruct each reviewer to read those sources directly — its job is to break the claim against ground truth, not critique prose**; **deliverable mode: include the FULL text of each changed deliverable (never only the diff), the rendered form where one exists, and the contents of `.claude/review-loop.deliverable-standard` if present — a one-line pointer to the project's own standard — plus the document it points at, so the lens can load it as additional checks**)
 - For iteration ≥ 2: the prior iteration's findings injected as a **Reflexion-style verbal reflection** (prepend: *"In the prior iteration you flagged: [list]. The developer applied fixes. Your new findings should reflect what's now true rather than re-litigate prior decisions."*)
 - An instruction to return JSON findings only, no preamble
 - **Plan mode only — hard PLAN-VS-CODE DISCIPLINE block**: "This document is a PLAN, not implementation. Do NOT emit findings of the form 'code at X does not implement Y' against a forward-looking spec. Valid findings: internal contradiction in the plan, missing required section, untestable done-criterion, constraint violation, Tier-1 ask missing for an implied file edit. Cap at 5 findings; quality over quantity."
 - **Claim mode only — hard CLAIM DISCIPLINE block**: "You are reviewing an analytical CONCLUSION, not code. Ground every finding in the cited primary source (read it; do not trust the analysis's own summary of it). Valid findings: a load-bearing claim contradicted or unsupported by the source, disconfirming evidence the analysis omitted, a method flaw that makes the claim unsupportable, overstatement vs. stated confidence. A failed falsification (you tried and could NOT break a claim) is a valid, useful result — report it. Cap at 6 findings; quality over quantity."
-- **Deliverable mode only — hard DELIVERABLE DISCIPLINE block**: "You are reviewing FINISHED work for whether its reader can use it — not whether it is correct, complete, or well-written. Assign the genre first; the checks are genre-dependent and mis-assigning it is how this lens produces noise. Every finding must carry a COUNT you measured (inventories, tables, list items, words per heading, sentence lengths) and must name the thing and the fix — which inventory becomes which table with which columns, which two sentences the answer moves into. 'Consider adding structure' is not a finding. Do not flag correctness, completeness, prose style, or word choice. A clean deliverable returns `[]`. Cap at 5 findings."
+- **Deliverable mode only — hard DELIVERABLE DISCIPLINE block**: "You are reviewing FINISHED work for whether its reader can use it — not whether it is correct, complete, or well-written. Assign the genre first; the checks are genre-dependent and mis-assigning it is how this lens produces noise. Every finding must carry a COUNT you measured (inventories, tables, list items, words per heading, sentence lengths) and must name the thing and the fix — which inventory becomes which table with which columns, which two sentences the answer moves into. 'Consider adding structure' is not a finding. Do not flag correctness, completeness, prose style, or word choice. A clean deliverable returns `[]`. Cap at 5 findings. The single exception to the count rule is a `checklist-unavailable` finding, which reports that a declared project standard could not be read and needs no measurement."
 
 All LLM reviewers dispatch in parallel (one message, multiple `Task` calls). Code mode: 5 lenses. Plan mode: 4 lenses. Claim mode: 4 lenses. Deliverable mode: 1 lens.
 
@@ -244,13 +252,17 @@ Drop the finding if the count is wrong (it says "zero tables" and there are
 four), if the cited passage doesn't exist, or if the check does not apply to the
 genre the deliverable actually is (a `reference` page flagged for list density).
 A miscounted finding is exactly the kind an author dismisses, so this stage is
-what keeps the lens credible.
+what keeps the lens credible. **Never falsify a `checklist-unavailable`
+finding** — it is a meta-signal about the run, not a claim about the artifact,
+and it cites a path that by definition could not be read, so the "cited passage
+doesn't exist" rule would silently delete the one signal that says the review
+was degraded.
 
 ### Step 6 — Aggregate + drift-guard + dedup
 
 After falsifier:
 
-1. **Drift-guard.** Compute cosine similarity between each finding's `claim` text and the diff text (deliverable mode: the full deliverable text, since the artifact is the whole document rather than the changed lines). Drop findings with similarity < 0.3 (off-topic / drift, per CodeAgent QA-Checker pattern). Use a simple TF-IDF approximation if no embedding model available.
+1. **Drift-guard.** Compute cosine similarity between each finding's `claim` text and the diff text. Drop findings with similarity < 0.3 (off-topic / drift, per CodeAgent QA-Checker pattern). Use a simple TF-IDF approximation if no embedding model available. **Deliverable mode:** compare the claim against its **cited passage plus that passage's section**, NOT the concatenated document. The 0.3 cutoff was calibrated against a short focused diff, and cosine between a short claim and a long whole document is systematically lower (the document's larger vector norm shrinks each shared term's contribution), so reusing the number against full text would silently make this a stricter filter in the one mode that has a single lens and no cross-lens corroboration. Exempt `checklist-unavailable` entirely — its claim is about a standard that failed to load, shares almost no vocabulary with the deliverable, and would always drift-drop.
 2. **Cross-iteration dedup.** For iteration ≥ 2: drop findings whose `claim` is cosine-similar (≥0.85) to any finding already in `state.findings_history[]` that was addressed.
 3. **Confidence filter.** For iteration ≥ 2: drop LLM findings with `confidence < 70` (execution-grounded always kept).
 4. **Classify.** `actionable` = severity ≥ medium AND `load_bearing: true`. `speculative` = the rest.
@@ -435,4 +447,4 @@ Print a one-line preamble: *"Running /review-loop on <branch>, iter <N>/<max>, s
 - Per memory entry `feedback-confidence-per-step`: each reviewer's prompt instructs it to **label `load_bearing` honestly** — in-iter fixes are limited to load-bearing items; speculative items surface as the exit checklist.
 - Per memory entry `feedback-claude-code-not-api`: when surfacing cost to the user, label as "plan usage (API-equivalent)" not "$X spent."
 - The Stop hook handles the infinite-loop guard (env var `CLAUDE_REVIEW_LOOP_ACTIVE=1` is set before each iteration's re-invocation); the skill itself does not need to check this — if you're running, you've been invited.
-- The Stop hook is a cheap **always-on gate, not an always-on review**: after the safety exits it also skips when **nothing reviewable changed** (only docs / handoffs / lockfiles / scratch / generated files) or when the **exact diff was already dispatched** for review, logging the decision to `.local-state/hook.log` either way. Per-project knobs under `<repo>/.claude/`: `review-loop.disabled` (opt out entirely), `review-loop.plan-paths` (globs that count as plan artifacts), `review-loop.code-exts` (extensions that count as reviewable code; the file replaces the built-in default set), `review-loop.deliverable-paths` (globs that count as reader-facing deliverables; also replaces its default set), `review-loop.deliverable-standard` (path to a project's own deliverable/report standard — the deliverable lens loads it as additional checks and, per its calibration, must say so rather than silently return `[]` if it can't).
+- The Stop hook is a cheap **always-on gate, not an always-on review**: after the safety exits it also skips when **nothing reviewable changed** (only docs / handoffs / lockfiles / scratch / generated files) or when the **exact diff was already dispatched** for review, logging the decision to `.local-state/hook.log` either way. Per-project knobs under `<repo>/.claude/`: `review-loop.disabled` (opt out entirely), `review-loop.plan-paths` (globs that count as plan artifacts), `review-loop.code-exts` (extensions that count as reviewable code; the file replaces the built-in default set), `review-loop.deliverable-paths` (globs that count as reader-facing deliverables; also replaces its default set — but anything under `.claude/` stays excluded unconditionally and cannot be re-included by an override, since that path is session machinery), `review-loop.deliverable-standard` (a one-line **pointer** holding the path of the project's own deliverable/report standard, e.g. `docs/REPORT-READABILITY-STANDARD.md` — read by the lens, not by the hook, as additional checks; if it or its target can't be read the lens must say so rather than silently return `[]`).

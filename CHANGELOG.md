@@ -19,8 +19,11 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   could catch "this plan adds a dashboard that increases your workload" and never
   "this finished page is unusable."
 
-  The lens now carries two scopes. Scope A (plan) is unchanged, byte-for-byte
-  apart from its heading level. Scope B (deliverable) assigns the artifact a
+  The lens now carries two scopes. Scope A's checks and calibration text carry
+  over unchanged — verified identical across all 58 non-blank lines of its body,
+  re-leveled one heading deeper and moved above Scope B — while its finding
+  schema gains two fields, `genre` and `check`, which Scope A emits as null.
+  Scope B (deliverable) assigns the artifact a
   genre — `report` / `reference` / `decision-ask` / `narrative` /
   `machine-output` — and runs an eleven-item checklist against it: answer-first,
   inventories rendered as prose instead of tables, lists carrying reasoning,
@@ -29,10 +32,12 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   introduced, code detail in the reading path, density, rigor apparatus in the
   reading path, and edit-meta.
 
-  Three mechanics keep it quiet, and all three came from exercising it rather
-  than from theory — a first cut fired on every control document tried, with
-  true-but-minor findings that a reader could not tell apart from a page nobody
-  can use. First, the genre gate: a `reference` page is *supposed* to be dense
+  Three mechanics keep it quiet. Two of the three came out of exercising the
+  lens rather than from the original design — a first cut fired on all three
+  control documents tried, producing eight true-but-minor findings a reader
+  could not tell apart from a page nobody can use. The genre gate was there from
+  the start; the other two were not. First, the genre gate: a `reference` page
+  is *supposed* to be dense
   with tables, so the density and list checks do not apply to one. Second,
   severity is blast radius rather than truthfulness, and the ratio has to appear
   in the finding — "6 inventories, 0 tables" is high, "2 of 9 headings" is low —

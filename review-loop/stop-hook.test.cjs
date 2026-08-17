@@ -334,6 +334,57 @@ test('hook: empty deliverable-paths override turns the deliverable branch off', 
   assert.equal(parseStdout(r), null, 'empty deliverable override => nothing reviewable => no block');
 });
 
+test('hook: .mdx under reports/ routes to --mode deliverable', () => {
+  const home = mkTempHome();
+  // Both docs promise .md/.mdx across all four deliverable directories.
+  const repo = gitRepoWithStagedFile(home, 'reports/2026/q3.mdx', '# q3\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-mdx');
+  const r = runHook(home, { session_id: 'p-deliv-mdx', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out, 'expected a block decision');
+  assert.ok(/--mode deliverable\b/.test(out.reason), `expected --mode deliverable, got: ${out.reason}`);
+});
+
+test('hook: top-level src/content page routes to --mode deliverable', () => {
+  const home = mkTempHome();
+  const repo = gitRepoWithStagedFile(home, 'src/content/about.md', '# about\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-srctop');
+  const r = runHook(home, { session_id: 'p-deliv-srctop', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  const out = parseStdout(r);
+  assert.ok(out, 'expected a block decision');
+  assert.ok(/--mode deliverable\b/.test(out.reason), `expected --mode deliverable, got: ${out.reason}`);
+});
+
+test('hook: an override cannot re-include .claude/ as a deliverable', () => {
+  const home = mkTempHome();
+  // The exclusion outranks the override — session machinery is never a
+  // deliverable, however the project globs it.
+  const repo = gitRepoWithStagedFile(home, '.claude/reports/x.md', '# x\n');
+  fs.writeFileSync(
+    path.join(repo, '.claude', 'review-loop.deliverable-paths'),
+    '.claude/**/*.md\n',
+  );
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-reinclude');
+  const r = runHook(home, { session_id: 'p-deliv-reinclude', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  assert.equal(parseStdout(r), null, '.claude/ stays excluded even when a glob names it');
+});
+
+test('hook: unreadable deliverable override fails closed, not open', () => {
+  const home = mkTempHome();
+  // A directory where the override file should be => readFileSync throws
+  // (EISDIR). Falling back to the full default set would turn a deliberate
+  // opt-out into an opt-in, so the deliverable set must come back empty.
+  const repo = gitRepoWithStagedFile(home, 'reports/weekly.md', '# weekly\n');
+  fs.mkdirSync(path.join(repo, '.claude', 'review-loop.deliverable-paths'), { recursive: true });
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-unreadable');
+  const r = runHook(home, { session_id: 'p-deliv-unreadable', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  assert.equal(parseStdout(r), null, 'unreadable override must not restore the default globs');
+});
+
 test('hook: handoffs and scratch are still not deliverables', () => {
   const home = mkTempHome();
   // Session machinery under .claude/ must stay out of the deliverable globs, or
@@ -343,6 +394,18 @@ test('hook: handoffs and scratch are still not deliverables', () => {
   const r = runHook(home, { session_id: 'p-deliv-handoff', cwd: repo, transcript_path: transcript });
   assert.equal(r.status, 0);
   assert.equal(parseStdout(r), null, 'a handoff is not a reader-facing deliverable => no block');
+});
+
+test('hook: the .claude/ exclusion is case-insensitive', () => {
+  const home = mkTempHome();
+  // globToRegex compiles with the `i` flag, so `**/*-summary.md` matches any
+  // casing; the exclusion has to match the same way or a `.Claude/` directory
+  // slips a handoff through as a deliverable.
+  const repo = gitRepoWithStagedFile(home, '.Claude/handoffs/2026-08-16_thing-summary.md', '# handoff\n');
+  const transcript = fakeTranscriptWithEdit(home, 'p-deliv-case');
+  const r = runHook(home, { session_id: 'p-deliv-case', cwd: repo, transcript_path: transcript });
+  assert.equal(r.status, 0);
+  assert.equal(parseStdout(r), null, '.Claude/ must be excluded exactly like .claude/');
 });
 
 // -----------------------------------------------------------------------
