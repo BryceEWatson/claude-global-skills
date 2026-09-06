@@ -509,8 +509,11 @@ function mkRepoWithDirtyFile(home, relPath = 'src/a.js') {
 test('hook: marks the dispatched review self-authored when this session edited the diff', () => {
   const home = mkTempHome();
   const repoDir = mkRepoWithDirtyFile(home);
-  // Deploy the guard into the temp HOME exactly where the hook looks for it.
-  fs.copyFileSync(path.join(__dirname, 'authorship-guard.mjs'),
+  // Deploy the guard into the temp HOME exactly where the hook looks for it. In a deployed
+  // copy the guard sits beside this file; in the repo it is the Claude-only overlay.
+  const guardSrc = [path.join(__dirname, 'authorship-guard.mjs'),
+    path.join(__dirname, 'overlays', 'claude', 'authorship-guard.mjs')].find(p => fs.existsSync(p));
+  fs.copyFileSync(guardSrc,
     path.join(home, '.claude', 'skills', 'review-loop', 'authorship-guard.mjs'));
 
   const sid = 'sid-self-authored';
