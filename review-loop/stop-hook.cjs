@@ -429,6 +429,39 @@ function emitAllowStop(reason) {
   process.exit(0);
 }
 
+
+/**
+ * Independence check — does the session we are about to hand the review to also
+ * happen to be the session that wrote the diff?
+ *
+ * For the hook path the answer is very nearly always YES by construction: the Stop
+ * event fires in the authoring session, so this is where "don't review your own work"
+ * was being broken automatically, every time, with nothing recording that it happened.
+ * The hook therefore does NOT suppress the review (its findings still have value, and
+ * an unattended run has nobody to dispatch a replacement) — it MARKS the run, and the
+ * skill withholds the `review-clean` token so a fresh session is still required to land.
+ *
+ * Returns { independence, authoredFiles } or null when it could not be determined.
+ */
+function checkAuthorship(sessionId, cwd) {
+  const guard = path.join(os.homedir(), '.claude', 'skills', 'review-loop', 'authorship-guard.mjs');
+  if (!fs.existsSync(guard)) return null;
+  try {
+    const out = execFileSync(process.execPath, [guard, '--session-id', sessionId, '--repo', cwd, '--json'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20000,
+    });
+    const parsed = JSON.parse(out);
+    return { independence: parsed.independence, authoredFiles: parsed.authoredFiles || [] };
+  } catch (err) {
+    // A guard that cannot run must not block the review; an unproven claim of
+    // independence is the only thing it is allowed to refuse.
+    try {
+      const parsed = JSON.parse((err && err.stdout) || '');
+      return { independence: parsed.independence, authoredFiles: parsed.authoredFiles || [] };
+    } catch (_) { return null; }
+  }
+}
+
 function emitBlock({ skillCommand, systemMessage }) {
   const out = {
     decision: 'block',
@@ -584,11 +617,21 @@ function main() {
   }
   const iteration = 0; // first invocation; skill will increment internally.
   const reviewable = planFiles.length + codeFiles.length + deliverableFiles.length;
-  const skillCommand = `/review-loop --auto --session-id ${sessionId} --iteration ${iteration} --mode ${mode}`;
-  logLine(`block: invoke skill iter=${iteration} mode=${mode} files=${files.length} reviewable=${reviewable} skipped=${skipFiles.length} sha=${diffSha ? diffSha.slice(0, 8) : 'n/a'}`);
+  // Independence: the Stop event fires IN the authoring session, so a hook-dispatched
+  // review is a self-review unless the tree was already dirty when the session began.
+  // Pass what was measured rather than assuming either way.
+  const authorship = checkAuthorship(sessionId, cwd);
+  const independence = authorship ? authorship.independence : 'unverified';
+  const selfAuthored = independence === 'refused' || independence === 'self-acknowledged';
+  const independenceFlag = ` --independence ${selfAuthored ? 'self-authored' : independence}`;
+
+  const skillCommand = `/review-loop --auto --session-id ${sessionId} --iteration ${iteration} --mode ${mode}${independenceFlag}`;
+  logLine(`block: invoke skill iter=${iteration} mode=${mode} files=${files.length} reviewable=${reviewable} skipped=${skipFiles.length} independence=${independence}${selfAuthored ? ` authored=${authorship.authoredFiles.length}` : ''} sha=${diffSha ? diffSha.slice(0, 8) : 'n/a'}`);
   emitBlock({
     skillCommand,
-    systemMessage: `Review-loop iter ${iteration + 1} starting in ${mode} mode (skip next: touch ${SKIP_NEXT_MARKER})`,
+    systemMessage: selfAuthored
+      ? `Review-loop iter ${iteration + 1} (${mode} mode) — SELF-REVIEW: this session edited ${authorship.authoredFiles.length} file(s) under review, so its verdict cannot be signed as independent. A fresh session is still required to land this.`
+      : `Review-loop iter ${iteration + 1} starting in ${mode} mode (skip next: touch ${SKIP_NEXT_MARKER})`,
   });
 }
 

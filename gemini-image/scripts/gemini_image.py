@@ -40,7 +40,7 @@ Usage examples:
       --aspect-ratio 16:9 --image-size 2K "Panoramic alpine valley at dawn"
 
   # Edit / compose from reference images (repeat --input-image up to the
-  # model's limit; Gemini 3 Pro accepts up to 8, 3.1 Flash up to 14)
+  # model's limit — it is per-model AND per-purpose; see SKILL.md's model table)
   python gemini_image.py --image -o edited.png \\
       -i room.png -i sofa.png "Place this sofa in this room, daylight"
 
@@ -73,20 +73,36 @@ from typing import Optional
 
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_MODEL = "gemini-2.5-flash"
-# GA workhorse ("Nano Banana"): cheap, fast, stable. Safe default.
-DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image"
+# The OFFLINE FLOOR ("Nano Banana 2", GA): the model used when /models is
+# unreachable. It must satisfy three properties, and this one is the only
+# current model that satisfies all three — see the 2026-07 measurements below:
+#   1. not deprecated (gemini-2.5-flash-image, the previous floor, shuts down
+#      2026-10-02, so a floor pointed at it would have started failing outright);
+#   2. honours EVERY --image-size this CLI advertises (measured: it returns a
+#      real 2048x2048 for 2K, where gemini-2.5-flash-image silently returned
+#      1024x1024 and gemini-3.1-flash-lite-image hard-400s on anything but 1K);
+#   3. cheap enough that a network blip can never cause a surprise bill
+#      ($0.067/1K image vs the pro tier's $0.134 — Google list pricing 2026-07).
+DEFAULT_IMAGE_MODEL = "gemini-3.1-flash-image"
 
-# Image-capable models verified against the live /models endpoint (2026-06).
+# Image-capable models verified against the live /models endpoint (2026-07).
 # Override with --model. This list backs help text + --images-only filtering;
 # IMAGE_MODEL_PREFERENCE (below) is the quality RANKING the resolver uses.
 IMAGE_MODELS = [
-    "gemini-2.5-flash-image",        # GA, high-volume workhorse
-    "gemini-3-pro-image",            # GA, highest fidelity, up to 8 ref images
+    "gemini-2.5-flash-image",        # GA "Nano Banana" — DEPRECATED, shuts down
+                                     # 2026-10-02; kept only so an existing
+                                     # --model/pin still validates until then.
+    "gemini-3-pro-image",            # GA "Nano Banana Pro", highest fidelity
     "gemini-3-pro-image-preview",    # preview alias of the above
-    "gemini-3.1-flash-image",        # GA, extreme aspect ratios + 512, video-in
+    "gemini-3.1-flash-image",        # GA "Nano Banana 2" — extreme ratios, 512,
+                                     # video-in; the offline floor
     "gemini-3.1-flash-image-preview",
+    "gemini-3.1-flash-lite-image",   # GA "Nano Banana 2 Lite" — cheapest/fastest
+                                     # ($0.0336/image); 1K ONLY, standard ratios
+                                     # only, no character/style reference images
     # imagen-4.0-* exist too but use the separate :predict endpoint, not
     # generateContent — out of scope for this generateContent-based client.
+    # (They are also deprecated, shutting down 2026-08-17.)
 ]
 
 # Verified aspect ratios (all current image models). 3.1-flash additionally
@@ -94,7 +110,11 @@ IMAGE_MODELS = [
 ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4",
                  "9:16", "16:9", "21:9",
                  "1:4", "4:1", "1:8", "8:1"]  # extremes: gemini-3.1-flash-image only
-# "512" is only honoured by gemini-3.1-flash-image; the K sizes are universal.
+# Per-model, NOT universal (measured 2026-07): "512" only on
+# gemini-3.1-flash-image; gemini-3.1-flash-lite-image accepts 1K only (a 400 on
+# anything else); gemini-2.5-flash-image accepts 2K/4K but silently returns 1K.
+# gemini-3-pro-image and gemini-3.1-flash-image are the only models that really
+# deliver 2K/4K. This list is the union the CLI accepts; the API is the arbiter.
 IMAGE_SIZES = ["512", "1K", "2K", "4K"]
 
 _INPUT_MIME = {
@@ -107,7 +127,7 @@ _EXT_FROM_MIME = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".web
 
 # Sentinel for "caller passed no model" (→ resolve best) vs. "caller chose a
 # model" (→ use verbatim). A plain-string default can't tell these apart, so an
-# explicit `gemini-2.5-flash-image` would be indistinguishable from the default.
+# explicit `gemini-3.1-flash-image` would be indistinguishable from the default.
 _RESOLVE = object()
 
 # Set True only inside main() so the auto-select disclosure prints for CLI use
@@ -123,9 +143,11 @@ _CLI_MODE = False
 IMAGE_MODEL_PREFERENCE = [
     "gemini-3-pro-image",             # flagship, GA — the "absolute best"
     "gemini-3-pro-image-preview",     # preview peer (only if no GA pro visible)
-    "gemini-3.1-flash-image",         # balanced GA flash (~half cost, close to pro)
+    "gemini-3.1-flash-image",         # balanced GA flash == DEFAULT_IMAGE_MODEL
     "gemini-3.1-flash-image-preview",
-    "gemini-2.5-flash-image",         # GA legacy floor == DEFAULT_IMAGE_MODEL
+    "gemini-3.1-flash-lite-image",    # GA lite: cheaper AND newer-generation than
+                                      # the 2.5 legacy below, so it outranks it
+    "gemini-2.5-flash-image",         # GA legacy, deprecated (shutdown 2026-10-02)
 ]
 
 _MODEL_CACHE_TTL = 86400  # 24h: a freshly-GA model is discoverable within a day
@@ -400,7 +422,7 @@ def resolve_best_image_model(api_key: Optional[str] = None, *,
                 f"Auto-selected best available image model: {best}. Override with "
                 f"--model <id> or GEMINI_IMAGE_DEFAULT (e.g. "
                 f"--model gemini-3.1-flash-image for cheaper/faster, "
-                f"--model gemini-2.5-flash-image for cheapest).",
+                f"--model gemini-3.1-flash-lite-image for cheapest — 1K only).",
                 file=sys.stderr,
             )
         return best
@@ -563,11 +585,18 @@ def generate_image(
     Returns a dict:
         output_paths : list[str]  — every saved file (>=0)
         output_path  : str | None — the first saved file (back-compat)
+        model        : str        — the model actually used, AFTER resolution
         mime_type    : str | None
         text         : str        — any accompanying model text
         blocked      : bool       — True if no image came back
         diagnostic   : str | None — why, when blocked is True
         raw          : dict       — full API response
+
+    `model` is reported back because callers that record provenance cannot
+    otherwise know what produced the image: the default path resolves the model
+    at call time, so the id is chosen here, not by the caller. A caller that
+    logs its own hard-coded guess instead will drift silently the moment
+    resolution picks something else.
     """
     if model is _RESOLVE or not model:  # falsy (None/"") resolves, matching the CLI
         model = resolve_best_image_model(api_key=api_key)
@@ -582,8 +611,9 @@ def generate_image(
         timeout=timeout,
     )
 
-    result = {"output_paths": [], "output_path": None, "mime_type": None,
-              "text": "", "blocked": False, "diagnostic": None, "raw": response}
+    result = {"output_paths": [], "output_path": None, "model": model,
+              "mime_type": None, "text": "", "blocked": False,
+              "diagnostic": None, "raw": response}
 
     try:
         parts = response["candidates"][0]["content"]["parts"]
@@ -681,7 +711,9 @@ def _build_parser() -> argparse.ArgumentParser:
     img.add_argument("--aspect-ratio", default="1:1", choices=ASPECT_RATIOS,
                      help="Aspect ratio (default: 1:1)")
     img.add_argument("--image-size", default="1K", choices=IMAGE_SIZES,
-                     help="Resolution (default: 1K; '512' only on gemini-3.1-flash-image)")
+                     help="Resolution (default: 1K; sizes are per-model — '512' "
+                          "only on gemini-3.1-flash-image, and "
+                          "gemini-3.1-flash-lite-image accepts 1K only)")
     return parser
 
 
