@@ -1,5 +1,4 @@
 ---
-targets: [claude]
 name: email-editorial-pass
 description: Run brycewatson.com's editorial voice pass over any outbound email BEFORE the draft is created. Fires on drafting, replying to, or composing any external / client / lead email on Bryce's behalf, including any create_draft of mail he sends. Outbound email clears the same voice bar as published content: no em dashes, no hype, first person + contractions, front-loaded point.
 user-invocable: true
@@ -12,8 +11,8 @@ Every external email Bryce sends represents him the same way a published post do
 ## Source of truth (read it; do not fork the rules)
 
 In priority order:
-1. `C:\Users\Bryce\Projects\brycewatson.com\_planning\voice-profile.md` — the living voice spec, the full source of truth.
-2. `C:\Users\Bryce\Projects\brycewatson.com\.claude\agents\editorial-reviewer\agent.md` — the reviewer's exact flagging rules and severities.
+1. `<brycewatson.com checkout>\_planning\voice-profile.md` — the living voice spec, the full source of truth.
+2. `<brycewatson.com checkout>\.claude\agents\editorial-reviewer\agent.md` — the reviewer's exact flagging rules and severities.
 
 These live in the brycewatson.com repo (read-only from here). If the checkout is missing, fall back to the inline hard rules below — they are the stable subset, not the whole spec.
 

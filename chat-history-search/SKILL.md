@@ -108,13 +108,13 @@ These all serialize as `"type":"user"` or contain the search term but are NOT Br
 
 ```bash
 # All CLI jsonl files
-ls /c/Users/Bryce/.claude/projects/*/*.jsonl
+ls ~/.claude/projects/*/*.jsonl
 
 # All Cowork jsonl files (use find — directory is deep)
-find /c/Users/Bryce/AppData/Roaming/Claude/local-agent-mode-sessions/ -name "*.jsonl"
+find "$APPDATA/Claude/"local-agent-mode-sessions/ -name "*.jsonl"
 
 # Also check the rename target (usually empty during migration but verify)
-find /c/Users/Bryce/AppData/Roaming/Claude/claude-code-sessions/ -name "*.jsonl"
+find "$APPDATA/Claude/"claude-code-sessions/ -name "*.jsonl"
 ```
 
 Count files containing the search term BEFORE deciding scope:
@@ -128,7 +128,7 @@ Cowork files split into 4 buckets — search priority differs:
 
 ```bash
 # Build file list once
-find /c/Users/Bryce/AppData/Roaming/Claude/local-agent-mode-sessions/ -name "*.jsonl" > /tmp/all.txt
+find "$APPDATA/Claude/"local-agent-mode-sessions/ -name "*.jsonl" > /tmp/all.txt
 grep -l "<term>" $(cat /tmp/all.txt) > /tmp/hits.txt
 
 # Categorize
