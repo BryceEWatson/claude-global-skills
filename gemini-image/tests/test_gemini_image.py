@@ -35,6 +35,7 @@ FIXTURE = [
     _model("gemini-3-pro-image-preview"),
     _model("gemini-3.1-flash-image"),
     _model("gemini-3.1-flash-image-preview"),
+    _model("gemini-3.1-flash-lite-image"),
     # Imagen is image-named but uses :predict, not generateContent → must be dropped.
     _model("imagen-4.0-generate-001", methods=("predict",)),
 ]
@@ -75,6 +76,94 @@ class ResolverTest(unittest.TestCase):
         self.assertGreater(k("gemini-3.10-pro-image"), k("gemini-3.2-pro-image"))
         # a newer flash never outranks an existing GA pro
         self.assertGreater(k("gemini-3-pro-image"), k("gemini-4-flash-image"))
+        # "flash-lite" is the small tier, so it must NOT be read as a flash: a
+        # lite model can never be auto-promoted over a real flash or pro.
+        self.assertGreater(k("gemini-3.1-flash-image"),
+                           k("gemini-3.1-flash-lite-image"))
+        self.assertGreater(k("gemini-3-pro-image"),
+                           k("gemini-3.1-flash-lite-image"))
+
+    # ---- floor invariants (the offline fallback must stay safe) ---------------
+    def test_offline_floor_is_not_a_deprecated_model(self):
+        # The floor is what a network blip falls back to, so it must not point at
+        # a model with a shutdown date. gemini-2.5-flash-image shuts down
+        # 2026-10-02 and imagen-4.0-* on 2026-08-17.
+        retired = {"gemini-2.5-flash-image", "imagen-4.0-generate-001",
+                   "imagen-4.0-ultra-generate-001", "imagen-4.0-fast-generate-001"}
+        self.assertNotIn(gi.DEFAULT_IMAGE_MODEL, retired)
+
+    def test_offline_floor_supports_every_advertised_size(self):
+        # Measured 2026-07: gemini-3.1-flash-lite-image 400s on any size but 1K
+        # and gemini-2.5-flash-image silently downgrades 2K/4K to 1K, so neither
+        # can be the floor while the CLI advertises 512/1K/2K/4K.
+        size_limited = {"gemini-3.1-flash-lite-image", "gemini-2.5-flash-image"}
+        self.assertNotIn(gi.DEFAULT_IMAGE_MODEL, size_limited)
+
+    def test_offline_floor_is_never_the_pro_tier(self):
+        # The floor must not be able to cause a surprise bill on the blip path.
+        tier, _ga, _ver = gi._image_model_sort_key(gi.DEFAULT_IMAGE_MODEL)
+        self.assertLess(tier, 3)
+
+    def test_floor_and_preference_list_agree(self):
+        # A floor missing from the curated ladder would rank below models the
+        # resolver considers worse than it.
+        self.assertIn(gi.DEFAULT_IMAGE_MODEL, gi.IMAGE_MODEL_PREFERENCE)
+        self.assertIn(gi.DEFAULT_IMAGE_MODEL, gi.IMAGE_MODELS)
+
+    def test_lite_outranks_legacy_but_loses_to_flash(self):
+        # Curated judgement (not derivable from the sort key, which tiers lite
+        # below flash regardless of version): with only the two cheap models
+        # visible, the newer + cheaper lite wins.
+        gi.list_models = lambda api_key=None: [_model("gemini-2.5-flash-image"),
+                                               _model("gemini-3.1-flash-lite-image")]
+        self.assertEqual(gi.resolve_best_image_model(api_key="k1"),
+                         "gemini-3.1-flash-lite-image")
+
+    def test_lite_never_displaces_flash_or_pro(self):
+        gi.list_models = lambda api_key=None: FIXTURE
+        self.assertEqual(gi.resolve_best_image_model(api_key="k1"), "gemini-3-pro-image")
+
+    # ---- resolved model is reported back to the caller ------------------------
+    def _stub_generate(self, captured):
+        """Replace gi.generate with a stub that records the model it was given
+        and returns one tiny inline image, so generate_image runs end to end."""
+        import base64
+        png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\0" * 8).decode()
+
+        def fake_generate(prompt, **kw):
+            captured["model"] = kw.get("model")
+            return {"candidates": [{"content": {"parts": [
+                {"inlineData": {"mimeType": "image/png", "data": png}}]}}]}
+        gi.generate = fake_generate
+
+    def test_result_reports_the_resolved_model_not_the_sentinel(self):
+        # A caller recording provenance must be able to learn what actually ran
+        # when it did NOT pass a model. Without this the id is unknowable.
+        import tempfile as _tf
+        captured = {}
+        orig_generate = gi.generate
+        try:
+            self._stub_generate(captured)
+            gi.list_models = lambda api_key=None: FIXTURE
+            out = os.path.join(self._tmp, "o.png")
+            res = gi.generate_image("x", output_path=out, api_key="k1")
+            self.assertEqual(res["model"], "gemini-3-pro-image")
+            self.assertEqual(captured["model"], "gemini-3-pro-image")
+            self.assertIsNot(res["model"], gi._RESOLVE)
+        finally:
+            gi.generate = orig_generate
+
+    def test_result_reports_an_explicit_model_verbatim(self):
+        captured = {}
+        orig_generate = gi.generate
+        try:
+            self._stub_generate(captured)
+            out = os.path.join(self._tmp, "o.png")
+            res = gi.generate_image("x", output_path=out, api_key="k1",
+                                    model="gemini-3.1-flash-lite-image")
+            self.assertEqual(res["model"], "gemini-3.1-flash-lite-image")
+        finally:
+            gi.generate = orig_generate
 
     # ---- ranking against a live list -----------------------------------------
     def test_resolves_best_quality_default(self):

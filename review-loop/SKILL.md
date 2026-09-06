@@ -30,6 +30,10 @@ Parse from the slash-command arguments:
 - `--cost-ceiling-tokens <n>` — combined input+output token budget; default 300000
 - `--scope <git-diff|head-1>` — default `git-diff` (uncommitted changes)
 - `--auto` — set when hook-invoked; suppresses preamble, writes structured exit
+- `--independence <independent|self-authored|unverified>` — set by the Stop hook from the
+  measured authorship check. Absent on a manual invocation, where Step 0 measures it itself.
+- `--self-review-ack "<reason>"` — the documented escape hatch. Runs the review in the
+  authoring session anyway, and permanently records WHY on the verdict. See Step 0.
 - `--mode <code|plan|claim|deliverable>` — default `code`. Controls which reviewer
   lens set fires in Step 4. The Stop hook auto-selects in this precedence order:
   1. any changed file matching the plan-artifact globs (`**/*-plan.md`,
@@ -66,6 +70,45 @@ Parse from the slash-command arguments:
 Treat missing args defensively: any arg can be omitted, all have defaults.
 
 ## Workflow
+
+### Step 0 — Independence gate (BEFORE any review work)
+
+A session cannot independently review work it wrote: it carries the authoring context, and
+therefore the same blind spots that produced the defect. This step runs **first**, so that
+nobody has spent reviewer effort by the time it stops them.
+
+Run the guard — this is a command, not a judgement call:
+
+```bash
+node ~/.claude/skills/review-loop/authorship-guard.mjs --session-id <session-id> --repo "$(git rev-parse --show-toplevel)" --json
+```
+
+It reports which files in the diff **this session (or a subagent it dispatched) edited**, and
+exits `0` independent · `3` self-authored · `4` unverified.
+
+Act on the exit code:
+
+- **`0` independent** → proceed to Step 1 normally. Nothing else changes.
+- **`3` self-authored, invoked manually** → **STOP. Do no review work.** Print the guard's
+  message verbatim: it names the fix (dispatch a fresh session, `gh pr checkout <n>`, review
+  there), not just the fault. Do not post a verdict. Do not fix anything. Exit.
+- **`3` self-authored, with `--self-review-ack "<reason>"`** → proceed, but the run is
+  permanently marked: every verdict it produces carries the SELF-REVIEW banner below and
+  **withholds the `review-clean` token**, so the auto-merge gate keeps holding and a human
+  decides. The reason is quoted verbatim on the PR.
+- **`3` self-authored, hook-invoked (`--auto`)** → the Stop event fires *in* the authoring
+  session, so this is the normal case there. Do **not** suppress the review: its findings still
+  have value and an unattended run has nobody to dispatch a replacement. Run it, fix
+  load-bearing findings as usual, and mark the verdict SELF-REVIEW as above.
+- **`4` unverified** → proceed, but the verdict says `independence: unverified` and names why.
+  Could-not-determine is never upgraded to independent.
+
+If `--independence` was already passed by the hook, trust it and skip re-running the guard.
+
+**One review per session.** Before starting, check `.local-state/<session-id>.json` for a prior
+completed run. A second `/review-loop` in a session that already ran one shares the first
+review's context — the same contamination one step later. Warn plainly, name the earlier run,
+and prefer a fresh session.
 
 ### Step 1 — State load
 
@@ -337,6 +380,7 @@ review-loop — <K> lens subagents (<names>) in independent contexts + an execut
 check. Findings falsified against the diff; not a human review.
 
 **Verdict:** <review-clean ✅ | exhausted — N unresolved | stalled> <one line>
+**Independence:** <independent — the reviewing session did not author this diff | ⚠️ SELF-REVIEW — NOT INDEPENDENT | unverified — could not be determined, see below>
 
 ### Fixed in-loop
 - **[load-bearing]** `path:line` — <issue> → <fix>
@@ -346,6 +390,21 @@ check. Findings falsified against the diff; not a human review.
 
 <!-- review-loop:<headRefOid> --> _Re-run after new commits to refresh._
 ```
+
+**When independence is anything but `independent`,** the verdict line MUST NOT contain the token
+`review-clean` — the auto-merge gate reads that token as "an independent review cleared this," and a
+self-review has not. Write `self-review — no blocking findings` instead, and open the comment with:
+
+```
+> ⚠️ **SELF-REVIEW — NOT INDEPENDENT.** This review ran in the session that wrote the code, so it
+> carries the same blind spots that produced any defect in it. Discount it accordingly.
+> Reason given: <verbatim --self-review-ack reason, or "hook-dispatched: the Stop event fires in the
+> authoring session">. Files this session edited in this diff: <n> (<list>).
+> A fresh session must still review this before it lands.
+```
+
+This is the whole enforcement: a self-review can still find things and still leaves a trail, but it
+cannot produce the token that lands the change. Withholding it needs no change to the merge gate.
 
 ## Surface the shipping gap — no-PR nudge (ALWAYS, on a terminal verdict)
 

@@ -486,3 +486,68 @@ test('hook: untracked docs-only does not trigger a review', () => {
   assert.equal(r.status, 0);
   assert.equal(parseStdout(r), null, 'untracked docs only => no review loop');
 });
+
+// ---------------------------------------------------------------------------
+// Independence marking. The Stop event fires IN the authoring session, so a
+// hook-dispatched review is a self-review nearly every time. These two tests pin
+// both directions of what the hook now tells the skill about that.
+// ---------------------------------------------------------------------------
+
+function mkRepoWithDirtyFile(home, relPath = 'src/a.js') {
+  const repoDir = path.join(home, 'repo');
+  fs.mkdirSync(path.join(repoDir, path.dirname(relPath)), { recursive: true });
+  spawnSync('git', ['init'], { cwd: repoDir });
+  spawnSync('git', ['-C', repoDir, 'config', 'user.email', 't@t'], {});
+  spawnSync('git', ['-C', repoDir, 'config', 'user.name', 't'], {});
+  fs.writeFileSync(path.join(repoDir, relPath), 'let x = 1;\n');
+  spawnSync('git', ['-C', repoDir, 'add', '-A'], {});
+  spawnSync('git', ['-C', repoDir, 'commit', '-m', 'init'], {});
+  fs.writeFileSync(path.join(repoDir, relPath), 'let x = 2;\n'); // the diff under review
+  return repoDir;
+}
+
+test('hook: marks the dispatched review self-authored when this session edited the diff', () => {
+  const home = mkTempHome();
+  const repoDir = mkRepoWithDirtyFile(home);
+  // Deploy the guard into the temp HOME exactly where the hook looks for it. In a deployed
+  // copy the guard sits beside this file; in the repo it is the Claude-only overlay.
+  const guardSrc = [path.join(__dirname, 'authorship-guard.mjs'),
+    path.join(__dirname, 'overlays', 'claude', 'authorship-guard.mjs')].find(p => fs.existsSync(p));
+  fs.copyFileSync(guardSrc,
+    path.join(home, '.claude', 'skills', 'review-loop', 'authorship-guard.mjs'));
+
+  const sid = 'sid-self-authored';
+  const projDir = path.join(home, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projDir, { recursive: true });
+  const edited = path.join(repoDir, 'src', 'a.js');
+  fs.writeFileSync(path.join(projDir, `${sid}.jsonl`),
+    `${JSON.stringify({ type: 'assistant', message: { content: [
+      { type: 'tool_use', name: 'Edit', input: { file_path: edited } },
+    ] } })}\n`);
+
+  const r = runHook(home, { session_id: sid, cwd: repoDir, transcript_path: path.join(projDir, `${sid}.jsonl`) });
+  const out = parseStdout(r);
+  assert.ok(out, 'a review should still be dispatched — the guard marks it, it does not suppress it');
+  assert.match(out.reason, /--independence self-authored/);
+  assert.match(out.systemMessage, /SELF-REVIEW/);
+  assert.match(out.systemMessage, /fresh session is still required/);
+});
+
+test('hook: falls open to unverified — never to independent — when the guard cannot run', () => {
+  const home = mkTempHome(); // no authorship-guard.mjs deployed here
+  const repoDir = mkRepoWithDirtyFile(home);
+  const sid = 'sid-no-guard';
+  const projDir = path.join(home, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projDir, { recursive: true });
+  fs.writeFileSync(path.join(projDir, `${sid}.jsonl`),
+    `${JSON.stringify({ type: 'assistant', message: { content: [
+      { type: 'tool_use', name: 'Edit', input: { file_path: path.join(repoDir, 'src', 'a.js') } },
+    ] } })}\n`);
+
+  const r = runHook(home, { session_id: sid, cwd: repoDir, transcript_path: path.join(projDir, `${sid}.jsonl`) });
+  const out = parseStdout(r);
+  assert.ok(out, 'a missing guard must not suppress the review');
+  assert.match(out.reason, /--independence unverified/);
+  assert.doesNotMatch(out.reason, /--independence independent/,
+    'a guard that could not run must never certify independence');
+});

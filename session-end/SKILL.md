@@ -223,6 +223,14 @@ state left held, where it lives, and the command to clear it — in the handoff'
 *and* in your closing message. An unreleasable claim the operator can see is a nuisance; one they
 cannot is a trap for the next session.
 
+**A close-out is a record, not a deploy — never block on CI.** Releasing a claim, writing the handoff,
+and stamping what happened are all descriptions of work that already occurred, so nothing here waits on
+a build, a check run, or a merge queue. If CI is red or still running when you close out, say that in
+the handoff and release the claim anyway. A desk that holds its claim until a pipeline turns green
+hands the next session a live-looking lock on a dead process, which is the exact failure this step
+exists to prevent. The companion rule on the reviewing side is "post the signed verdict and stop"
+(`docs/AUTO-MERGE-POLICY.md` in Command).
+
 **Then go back and record what it changed.** This step runs after the handoff is written, so a contract
 that succeeds mutates state the handoff has already described — the file it touched is missing from
 **Artifacts**, and any line saying the claim is held is now false. That is the same failure this skill

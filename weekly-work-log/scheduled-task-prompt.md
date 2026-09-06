@@ -113,10 +113,45 @@ direct control). For each digest session **not already represented** in `source.
   with a durable `mission` (from the project's CHARTER/README, not one week) + a this-week
   `frontier` (derived). Display-role projects get a generalized mission too.
 
+**THE PAGE HEADLINE — rewrite it every run (`headline` + `headlineWeek`).** `source.headline`
+is the `<h1>`, the largest text on the page, and it is a CLAIM ABOUT THIS WEEK. It is authored,
+never computed, and it is NOT carried over: whatever is in the file is the PREVIOUS run's
+headline, so treat it as stale input, not a default to keep.
+
+- After distilling this week's items, write a headline **from those items** — one plain,
+  subject-led sentence naming the week's real through-line (same voice rules as everything
+  else: no marketing, no em dashes, never announce the page's own honesty).
+- Set **`headlineWeek`** to the Monday `YYYY-MM-DD` of the week you are reporting. **Always
+  write both fields together.**
+- If this week has no honest through-line worth asserting, set `headline` to exactly
+  `"What I worked on this week."` — the neutral title, which claims nothing. **Choosing the
+  neutral title deliberately is correct and expected; inventing a grander claim to fill the
+  slot is not.** Never restate a previous week's headline.
+- The build enforces this: a headline stamped for another week (or unstamped) is DROPPED to
+  the neutral title and flagged in the PR body. That flag in your own PR means you skipped
+  this step.
+
+**THE "NEXT UP" LINE — same rule (`nextUp` + `nextUpWeek`).** `source.nextUp` is the closing
+line under the feed. It had the identical defect and the identical cause: whatever is in the
+file is the PREVIOUS run's line, and it used to republish itself unchanged.
+
+- Write what is genuinely next **after this week's work**, in the same voice, then set
+  **`nextUpWeek`** to the Monday `YYYY-MM-DD` of the week you are reporting. **Always write
+  both fields together.**
+- **If the plan honestly has not changed, re-stating last week's line is correct** — just
+  re-stamp it for this week. That is the one place this differs from the headline: a
+  forward-looking line can still be true, whereas a claim about a past week cannot.
+- If nothing specific is next, **remove `nextUp`** rather than padding it. The page then
+  renders no next-up block at all, which is honest.
+- The build enforces this: an unstamped or mis-stamped line is DROPPED ENTIRELY (no neutral
+  fallback, because there is no honest generic "next up" text) and flagged in the PR body.
+
 Then GATE your own drafting before anything builds:
 - `node scripts/work-log-validate-source.mjs` — it fails LOUDLY on an em/en dash, a " -- "
-  in authored prose, a denylisted token surviving your prose, a bad status/tier, or a
-  display-role item carrying a git reference. FIX every flagged item and re-run until clean.
+  in authored prose, a denylisted token surviving your prose, a bad status/tier, a
+  display-role item carrying a git reference, a claiming `headline` with no valid
+  `headlineWeek` stamp, or a `nextUp` with no valid `nextUpWeek` stamp. FIX every flagged
+  item and re-run until clean.
 - Claim-falsification self-check: read `~/.claude/skills/review-loop/agents/claim-falsification.md`
   and `claim-calibration.md` and apply those lenses VERBATIM (do not fork them) to each
   drafted item — does the badge overstate the evidence? Downgrade any overstated badge.
