@@ -40,14 +40,16 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
 - `<repo>/scripts/lib/work-log-redact.mjs` — shared secret/leak scrubber (the ONE canonical redactor; extend its term lists, never duplicate).
 - `<repo>/scripts/work-log.mjs append <draft.json>` — appends a curated batch written as a JSON file; validates first (including the apostrophe batch check) and never puts prose inside code.
 - `<repo>/scripts/work-log-merge-gate.mjs` — MERGE or HOLD for a weekly PR under the 2026-09-10 ruling: weekly branch, data-only allowlist, green `correctness` on the head, exactly one `advisory-flags: 0` line, no hold marker or label. The only merge path.
-- `<repo>/scripts/work-log-candidates.mjs` — checks, renders, and records Bryce's one-word answers for `data/weekly-candidates/<weekStart>.json` (the LinkedIn candidate and the post card).
+- `<repo>/scripts/work-log-candidates.mjs` — checks, renders, and records Bryce's labeled replies for `data/weekly-candidates/<weekStart>.json` (the LinkedIn candidate and the post card).
 - `~/.claude/skills/weekly-work-log/run-state.cjs` — atomically records a privacy-safe
   `running` / `succeeded` / `failed` status for the Sunday run (outcomes `MERGED`, `HELD`,
   `PR_ALREADY_OPEN`, `NO_CHANGE`). The Monday preview reads this instead of treating every
   missing PR as a quiet no-op.
 - `~/.claude/skills/weekly-work-log/weekly-pr-guard.cjs` — the preflight check for an open
-  weekly PR. Under seven Pacific calendar days old: quiet success `PR_ALREADY_OPEN`. Seven or
-  more: failure `STALE_WEEKLY_PR` with the PR's link, which Monday raises to Bryce. Before
+  weekly or backfill PR. Opened on or after the Sunday that ends this run's week (Pacific):
+  quiet success `PR_ALREADY_OPEN`. Opened before it, which includes anything seven or more days
+  old and a PR a late-starting run opened mid-week: failure `STALE_WEEKLY_PR` with the PR's
+  link, which Monday raises to Bryce. Before
   2026-09-17 an open PR was always a success, which is how PR 112 blocked four weeks unseen.
 
 ## Modes
@@ -62,7 +64,7 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
   - **Curate every session (distillation):** distil EVERY interactive Claude Code session of the week into `source.json` items so the page shows the full week (the original "curate every session" directive, automated). Done in-context from the redacted digest (not subagents). Private/sensitive sessions are **summarized through the privacy filter, not dropped or stubbed** (display roles: Akaya/Personal/ShopForge — generalized to the kind of work, never git-read; "personal finance is fine, we just need iron clad rules"). Each item is linked to the SPECIFIC goal it advances via `objectiveId` (read `objectives.public.json`) — never leave a multi-goal project like Command to fall through to its catch-all/parent goal, or the goal lens collapses to one bucket; client/private items get no `objectiveId` (they stay off `/goals`). The drafted prose is gated by `work-log-validate-source.mjs` (fails loud on a dash/leak/bad-badge) + a claim-falsification self-check BEFORE the build.
   - **Deterministic backstop:** `work-log-via-honestweek.mjs` (honestweek) git-verifies + number-fences every number (aborts on any unresolved/non-Bryce commit, so NO PR on bad data). Items the job drafts carry `"drafted": "auto-<date>"`.
   - **Fail-open advisory:** judgment that ASSISTS the reviewer (badge-vs-prose, coverage gaps, badge-vs-git, a downgrade-only privacy adjudicator, reversal-coverage) spliced into the PR body, plus the noun-harvester (count only). Any LLM/network/`gh` failure → a single "advisory unavailable" line; never blocks the PR. Advisory may only DOWNGRADE/FLAG.
-  - **Candidates:** a LinkedIn candidate for the twelve-week test and a one-screen post card (from the week's work or the findings miner), or an explicit skip with the reason for each, in `data/weekly-candidates/<weekStart>.json`. Each candidate carries a receipt, Bryce's voice, a named reader and what they can do after, and honest status, or it is a skip. The run first collects last week's one-word answers from the merged PR.
+  - **Candidates:** a LinkedIn candidate for the twelve-week test and a one-screen post card (from the week's work or the findings miner), or an explicit skip with the reason for each, in `data/weekly-candidates/<weekStart>.json`. Each candidate carries a receipt, Bryce's voice, a named reader and what they can do after, and honest status, or it is a skip. The run first collects last week's labeled replies from the merged PR.
   - **Findings miner:** the run executes `honestweek mine` (formerly the Thursday `weekly-publishable-findings` task, now disabled) and commits its ledger in the weekly PR, so declined findings stop coming back.
   - **Gated self-merge:** the run opens exactly one PR and never pushes `main`. It then waits for CI and runs the merge gate, which merges only under Bryce's 2026-09-10 `auto` ruling ("auto-merge when every deterministic gate passes and the advisory raises no flag", weekly log only). A hold waits for Bryce, and Monday raises it.
 - **`--week YYYY-MM-DD`**: backfill a past completed week's archive (see above). Manual only.
@@ -109,13 +111,13 @@ The unattended weekly run is a **Claude scheduled task** (`mcp__scheduled-tasks`
 - **Failure visibility:** every run starts by writing `last-run.json` under the live
   scheduled-task directory and must write one terminal state. Fetch/worktree setup and a
   non-data PR-open failure retry exactly once; data verification never retries into a PR.
-  An open weekly PR aged seven or more calendar days is a failure (`STALE_WEEKLY_PR`), not
-  a success.
+  An open weekly PR left over from an earlier week is a failure (`STALE_WEEKLY_PR`), not a
+  success.
 - **The Monday preview** (`weekly-work-log-preview`, prompt in
   `preview-scheduled-task-prompt.md`) reads that state. A failure, a stale PR, a missed run,
   or a held merge is raised to Bryce through the `ask` skill. A merged week becomes a
-  "merged, here's what went live" note with the candidates and one ask for his one-word
-  answers. It launches a localhost preview only for an open PR.
+  "merged, here's what went live" note with the candidates and one ask for his labeled
+  replies. It launches a localhost preview only for an open PR.
 - **Deploying a prompt change:** edit the prompt in `claude-global-skills`, run
   `python scripts/sync.py --deploy`, then paste the text below the `---` rule into
   `update_scheduled_task` for `weekly-work-log` or `weekly-work-log-preview`.

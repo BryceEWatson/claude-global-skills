@@ -46,17 +46,19 @@ To raise something to Bryce, use the ask skill (label, @mention, toast, Slack li
 - Read the week's candidates with
   `git -C C:\Users\Bryce\Projects\brycewatson.com show origin/main:data/weekly-candidates/<weekStart>.json`.
   Report the LinkedIn candidate text in full with its receipt, and the post card's headline,
-  reader, opening, and search phrase. If either is not a skip, ask on the merged PR:
-  "Week of <date> is live. LinkedIn: reply posted or skip. Post card: reply draft, revise: <note>, or no."
+  reader, opening, and search phrase. If either is not a skip, ask on the merged PR, naming only
+  the sides that have a candidate:
+  "Week of <date> is live. LinkedIn: reply `linkedin: posted` or `linkedin: skip`. Post card: reply `post: draft`, `post: revise: <note>`, or `post: no`."
   Two skips: report both reasons and do not ask.
 - Stop. No localhost preview is needed for a merged week.
 
 ## 4. Cases 4 and 6: preview the open PR for Bryce
 ### 4a. Verify the PR
-- Candidate PRs MUST have a headRefName beginning `work-log/weekly-` or `work-log/backfill-`.
-  There is no title fallback.
-- Verify its changed files include `src/data/work-log.source.json`. Use the newest PR that
-  satisfies both.
+- If `last-run.json` has a `prNumber`, that is the PR. Otherwise use the newest open PR whose
+  headRefName begins `work-log/weekly-` or `work-log/backfill-` (there is no title fallback).
+- Verify the PR is open, its head begins with one of those prefixes, and its changed files
+  include a work-log data file (`src/data/work-log.source.json`, `src/data/work-log.json`,
+  `src/data/goals.json`, or a file under `src/data/reports/`).
 - If no verified candidate exists, STOP without killing an existing server or touching a
   preview worktree, and report "No verified weekly work-log PR is open."
 
@@ -83,9 +85,11 @@ To raise something to Bryce, use the ask skill (label, @mention, toast, Slack li
 - Poll `http://localhost:4321/now` for a 200 response, at most 20 times with a two-second
   interval. If it never serves, report the last 30 log lines.
 - For case 4 (HELD), ask on the PR: "Weekly PR <n> is held: <first reason, in plain words>.
-  Preview at http://localhost:4321/now. Say merge <n> or hold <n>." For case 6 with outcome
-  `PR_OPENED`, ask the same with "opened without a merge verdict". For `PR_ALREADY_OPEN`, the
-  open PR was raised last week; report it without a second ask.
+  Preview at http://localhost:4321/now. Say merge <n> or hold <n>." If the PR carries a
+  candidates file that is not two skips, add the candidate reply line from step 3 to the same
+  ask. For case 6 with outcome `PR_OPENED`, ask the same with "opened without a merge verdict".
+  For `PR_ALREADY_OPEN`, a second firing found this week's PR already open; report it without a
+  second ask.
 
 ## 5. Report
 - Lead with what needs Bryce, if anything, and the word that clears it; then what went live or

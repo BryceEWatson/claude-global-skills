@@ -3,21 +3,27 @@
 
 /**
  * Preflight for the unattended Sunday weekly work-log run: is a weekly PR already open,
- * and if so, is it fresh or stuck?
+ * and if so, does it belong to this run's week or is it left over from an earlier one?
  *
  * Before 2026-09-17 an open weekly PR always recorded success (PR_ALREADY_OPEN) and stopped
  * the run. PR 112 stayed open from 17 August, so four Sunday runs "succeeded" in seconds,
- * nothing was drafted, and the Monday preview had no failure to surface. Now an open weekly
- * PR aged seven or more Pacific calendar days is a failure the Monday preview raises.
+ * nothing was drafted, and the Monday preview had no failure to show.
+ *
+ * The rule. Each run reports the week that ends on the most recent Sunday (Pacific; today, if
+ * today is Sunday). An open weekly or backfill PR opened on or after that Sunday belongs to this
+ * cycle (a second firing of the same run, say) and stops the run quietly. One opened before that
+ * Sunday is left over from an earlier week: that is STALE, a failure Monday raises. This covers
+ * every PR seven or more days old, and also a PR opened mid-week by a Sunday run that started
+ * late, which a plain seven-day limit would let through for another week.
  *
  * Verdicts (exit code):
  *   CLEAR  (0)  no open weekly PR; the run continues
- *   FRESH  (10) an open weekly PR younger than the limit; the run stops quietly (success)
- *   STALE  (11) an open weekly PR at or over the limit; the run stops as a failure
- *   ERROR  (2)  could not read the open PRs; the caller persists a failure
+ *   FRESH  (10) an open weekly PR from this cycle; the run stops quietly (success)
+ *   STALE  (11) an open weekly PR from an earlier cycle; the run stops as a failure
+ *   ERROR  (2)  could not read the open PRs, or could not record the result
  *
  * Usage:
- *   node weekly-pr-guard.cjs [--record] [--now ISO] [--max-age-days 7] [--prs-json FILE] [--state-dir DIR]
+ *   node weekly-pr-guard.cjs [--record] [--now ISO] [--prs-json FILE] [--state-dir DIR]
  *
  * --record writes the terminal run state through run-state.cjs (FRESH -> success
  * PR_ALREADY_OPEN, STALE -> fail STALE_WEEKLY_PR, ERROR -> fail PR_LIST_FAILED).
@@ -30,8 +36,9 @@ const path = require('path');
 
 const REPO = 'BryceEWatson/brycewatson.com';
 const HEAD_PREFIXES = ['work-log/weekly-', 'work-log/backfill-'];
-const REQUIRED_FILES = ['src/data/work-log.source.json'];
+const WORK_LOG_DATA = /^src\/data\/(work-log\.source\.json|work-log\.json|goals\.json|reports\/)/;
 const TIME_ZONE = 'America/Los_Angeles';
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function option(name) {
   const index = process.argv.indexOf(`--${name}`);
@@ -41,17 +48,32 @@ function option(name) {
   return value;
 }
 
-// YYYY-MM-DD of an instant as a Pacific wall-calendar date.
-function pacificDate(instant) {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' })
-    .formatToParts(new Date(instant));
+function pacificParts(instant) {
+  const date = new Date(instant);
+  if (Number.isNaN(date.getTime())) throw new Error(`not a valid time: ${instant}`);
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' })
+    .formatToParts(date);
   const get = (type) => parts.find((p) => p.type === type).value;
-  return `${get('year')}-${get('month')}-${get('day')}`;
+  return { ymd: `${get('year')}-${get('month')}-${get('day')}`, weekday: WEEKDAYS.indexOf(get('weekday')) };
 }
 
-// Whole calendar days between two Pacific dates. Calendar days, not elapsed hours: a PR opened
-// minutes after last Sunday's 22:00 start is six days and twenty-three hours old at this
-// Sunday's start, and an hour-based limit would let it through for another week.
+// YYYY-MM-DD of an instant as a Pacific wall-calendar date.
+function pacificDate(instant) {
+  return pacificParts(instant).ymd;
+}
+
+function addDays(ymd, days) {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// The Sunday (Pacific) that ends the week this run reports: today if today is Sunday.
+function reportWeekEnd(now) {
+  const { ymd, weekday } = pacificParts(now);
+  return addDays(ymd, -weekday);
+}
+
 function calendarDaysBetween(fromInstant, toInstant) {
   const from = Date.parse(`${pacificDate(fromInstant)}T00:00:00Z`);
   const to = Date.parse(`${pacificDate(toInstant)}T00:00:00Z`);
@@ -61,29 +83,30 @@ function calendarDaysBetween(fromInstant, toInstant) {
 function isWeeklyPr(pr) {
   const head = String(pr.headRefName || '');
   if (!HEAD_PREFIXES.some((prefix) => head.startsWith(prefix))) return false;
-  const files = (pr.files || []).map((f) => f.path || f);
-  return REQUIRED_FILES.every((f) => files.includes(f));
+  return (pr.files || []).some((f) => WORK_LOG_DATA.test(f.path || f));
 }
 
-function evaluate(prs, { now = new Date().toISOString(), maxAgeDays = 7 } = {}) {
+function evaluate(prs, { now = new Date().toISOString() } = {}) {
+  const weekEnd = reportWeekEnd(now);
   const weekly = (prs || []).filter(isWeeklyPr)
-    .map((pr) => ({ number: pr.number, url: pr.url, headRefName: pr.headRefName, createdAt: pr.createdAt, ageDays: calendarDaysBetween(pr.createdAt, now) }))
-    .sort((a, b) => b.ageDays - a.ageDays);
-  if (weekly.length === 0) return { verdict: 'CLEAR', prs: [] };
+    .map((pr) => ({ number: pr.number, url: pr.url, headRefName: pr.headRefName, createdAt: pr.createdAt, openedOn: pacificDate(pr.createdAt), ageDays: calendarDaysBetween(pr.createdAt, now) }))
+    .sort((a, b) => a.openedOn.localeCompare(b.openedOn));
+  if (weekly.length === 0) return { verdict: 'CLEAR', weekEnd, prs: [] };
   const oldest = weekly[0];
-  if (oldest.ageDays >= maxAgeDays) {
+  if (oldest.openedOn < weekEnd) {
     return {
       verdict: 'STALE',
+      weekEnd,
       pr: oldest,
       prs: weekly,
-      message: `Weekly work-log PR ${oldest.number} has been open ${oldest.ageDays} days (since ${pacificDate(oldest.createdAt)}), so this week was not drafted. Land or close it.`,
+      message: `Weekly work-log PR ${oldest.number} has been open since ${oldest.openedOn} (${oldest.ageDays} days), before this run's week ended on ${weekEnd}, so this week was not drafted. Land or close it.`,
     };
   }
-  return { verdict: 'FRESH', pr: oldest, prs: weekly, message: `Weekly work-log PR ${oldest.number} is open (${oldest.ageDays} days old); not opening a duplicate.` };
+  return { verdict: 'FRESH', weekEnd, pr: oldest, prs: weekly, message: `Weekly work-log PR ${oldest.number} was opened for this week on ${oldest.openedOn}; not opening a duplicate.` };
 }
 
 function listOpenPrs() {
-  const out = execFileSync('gh', ['pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '100', '--json', 'number,url,headRefName,createdAt,files'], { encoding: 'utf8' });
+  const out = execFileSync('gh', ['pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '200', '--json', 'number,url,headRefName,createdAt,files'], { encoding: 'utf8' });
   return JSON.parse(out);
 }
 
@@ -101,26 +124,34 @@ function record(result, stateDir) {
     return;
   }
   const r = spawnSync(process.execPath, [runState, ...args, ...extra], { encoding: 'utf8' });
-  if (r.status !== 0) throw new Error(`run-state.cjs failed: ${r.stderr || r.stdout}`);
+  if (r.status !== 0) throw new Error(`run-state.cjs failed: ${(r.stderr || r.stdout || '').trim()}`);
 }
 
 function main() {
   const shouldRecord = process.argv.includes('--record');
-  const stateDir = option('state-dir');
   let result;
+  let stateDir = null;
   try {
+    stateDir = option('state-dir');
     const prsJson = option('prs-json');
     const prs = prsJson ? JSON.parse(fs.readFileSync(prsJson, 'utf8')) : listOpenPrs();
-    const maxAge = option('max-age-days');
-    result = evaluate(prs, { now: option('now') || new Date().toISOString(), maxAgeDays: maxAge == null ? 7 : Number(maxAge) });
+    result = evaluate(prs, { now: option('now') || new Date().toISOString() });
   } catch (error) {
     result = { verdict: 'ERROR', message: `Could not list open pull requests: ${String(error.message).split('\n')[0]}` };
   }
-  if (shouldRecord) record(result, stateDir);
+  if (shouldRecord) {
+    try {
+      record(result, stateDir);
+    } catch (error) {
+      // Could not persist the verdict: say so on stdout and exit ERROR, never a success code.
+      console.log(JSON.stringify({ ...result, recordError: String(error.message).split('\n')[0] }, null, 2));
+      process.exit(2);
+    }
+  }
   console.log(JSON.stringify(result, null, 2));
   process.exit({ CLEAR: 0, FRESH: 10, STALE: 11, ERROR: 2 }[result.verdict]);
 }
 
-module.exports = { evaluate, calendarDaysBetween, pacificDate, isWeeklyPr };
+module.exports = { evaluate, calendarDaysBetween, pacificDate, reportWeekEnd, isWeeklyPr };
 
 if (require.main === module) main();

@@ -34,12 +34,16 @@ Follow `~/.claude/skills/weekly-work-log/SKILL.md` rules exactly. Do these steps
 - Check for an open weekly PR with the guard. It records its own result:
   `node "{{SKILL_HOME}}/weekly-pr-guard.cjs" --record`
   - exit 0 (`CLEAR`): no open weekly PR. Continue.
-  - exit 10 (`FRESH`): a weekly PR under seven Pacific calendar days old is open. The guard
-    recorded success `PR_ALREADY_OPEN`. Report it and STOP without creating a duplicate.
-  - exit 11 (`STALE`): a weekly PR seven or more days old is still open, so a week is going
-    uncurated. The guard recorded failure `STALE_WEEKLY_PR` with the PR's link. Report it and
-    STOP. Do not merge, close, or rebase that PR: it was held for a reason Bryce has to see.
-  - exit 2 (`ERROR`): the guard could not list PRs and recorded `PR_LIST_FAILED`. STOP.
+  - exit 10 (`FRESH`): a weekly PR opened for this same week is open (a second firing). The
+    guard recorded success `PR_ALREADY_OPEN`. Report it and STOP without creating a duplicate.
+  - exit 11 (`STALE`): a weekly or backfill PR opened before this run's week ended is still
+    open, so a week is going uncurated. The guard recorded failure `STALE_WEEKLY_PR` with the
+    PR's link. Report it and STOP. Do not merge, close, or rebase that PR: it was held for a
+    reason Bryce has to see.
+  - exit 2 (`ERROR`): the guard could not list PRs (it recorded `PR_LIST_FAILED`) or could not
+    record its verdict (its output has `recordError`). In the second case persist
+    `GUARD_RECORD_FAILED` yourself if you can. STOP.
+  - any other exit or no JSON output: persist `GUARD_FAILED` and STOP.
 - Prepare WORKTREE from `origin/main` without disturbing BASE:
   1. Inspect `git -C BASE worktree list --porcelain`.
   2. If WORKTREE is registered, inspect `git -C WORKTREE status --porcelain`. If dirty,
@@ -209,8 +213,9 @@ quality) and steadier blog posting. Everything here goes in one file,
    `work-log/weekly-` (`gh pr list --repo BryceEWatson/brycewatson.com --state merged --search "head:work-log/weekly-" --limit 1 --json number,headRefName`).
    If `data/weekly-candidates/` holds the file for the week that PR reported, run
    `node scripts/work-log-candidates.mjs collect data/weekly-candidates/<thatWeek>.json --pr <n>`.
-   It records only one-word replies from Bryce (`posted`, `skip`, `draft`, `revise: <note>`,
-   `no`). Then remove the ask label from that PR if present:
+   It records only labeled replies from Bryce, one per line (`linkedin: posted`,
+   `linkedin: skip`, `post: draft`, `post: revise: <note>`, `post: no`), and ignores a reply to a
+   side that was a skip. Then remove the ask label from that PR if present:
    `gh pr edit <n> --repo BryceEWatson/brycewatson.com --remove-label needs-bryce`.
    - A `draft` answer: create one board item for a session to draft that post through the
      site's normal gates:
@@ -249,6 +254,8 @@ OWN distillation: #2 badge-vs-prose (reuse the claim lenses), #3 coverage (any s
 failed to curate), #5 badge-vs-git reconciliation, #6 privacy (leak-by-meaning), #9 reversal
 coverage. Then run `node scripts/work-log-harvest-nouns.mjs` and surface ONLY the count.
 
+Write the sidecar as plain bullets with no `#` headings and no code blocks: it is spliced under
+the body's `### Advisory analysis` heading, and the merge gate reads only that section.
 **End the sidecar with exactly one line `advisory-flags: <N>`.** N is the number of things a
 reviewer should look at before this publishes: an item you could not verify, a badge you are
 unsure of, a privacy doubt, an uncovered session. **Any of the five checks that failed or did
@@ -277,15 +284,16 @@ holds the merge.)
 
 ## 7. Merge gate (the Owner's 2026-09-10 ruling; never merge any other way)
 - Read the PR's head SHA: `gh pr view <n> --repo BryceEWatson/brycewatson.com --json headRefOid`.
-- Wait for CI on that head: run `gh pr checks <n> --repo BryceEWatson/brycewatson.com` every
-  60 seconds, at most 30 times, until no check is pending.
-- `node scripts/work-log-merge-gate.mjs --pr <n> --expect-head <sha> --merge --json`
+- `node scripts/work-log-merge-gate.mjs --pr <n> --expect-head <sha> --wait 30 --merge --json`
+  (`--wait 30` polls once a minute for up to thirty minutes until the `correctness` check has
+  reported on that head and nothing is still running; GitHub reports no checks at all for the
+  first moments after a PR opens, so never decide on an empty check list yourself)
   - exit 0: merged. Record
     `node "{{SKILL_HOME}}/run-state.cjs" success --outcome MERGED --pr-url "<url>" --pr-number "<n>" --week-start "<YYYY-MM-DD>" --week-end "<YYYY-MM-DD>"`.
   - exit 3: held. The PR stays open for Bryce. Record
     `node "{{SKILL_HOME}}/run-state.cjs" success --outcome HELD --message "<the gate's reasons, joined with semicolons>" --pr-url "<url>" --pr-number "<n>" --week-start "<YYYY-MM-DD>" --week-end "<YYYY-MM-DD>"`.
     Do not try to clear a hold (no relabeling, no body edits, no re-runs to get a green gate).
-  - exit 2 or CI still pending after 30 checks: record HELD with that reason.
+  - exit 2 (the gate could not read the PR): record HELD with that reason.
 - Never run `gh pr merge` yourself. The gate is the only merge path.
 
 ## 8. Report
