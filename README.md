@@ -65,8 +65,9 @@ domains, and assumptions to yours.
 > renamed); `/session-handoff` still works if it's installed.
 >
 > Retired skills live under [`retired/`](retired/), which the sync tool never
-> deploys. `session-pickup` moved there on 2026-09-16; its reconcile rules now ride
-> in the continuation prompt `session-end` emits.
+> deploys, checks or captures. `session-pickup` moved there on 2026-09-16; its reconcile
+> rules now ride in the continuation prompt `session-end` emits. Retiring doesn't
+> uninstall: if you already have `~/.claude/skills/session-pickup`, delete it by hand.
 
 ## Privacy & safety
 

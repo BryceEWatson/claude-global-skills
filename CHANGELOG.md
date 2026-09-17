@@ -153,7 +153,9 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 - **`session-pickup` is retired** and moved to `retired/session-pickup/`, which
   `sync.py` never deploys. Across every project's chat logs it had run 7 times,
   against 25 sessions that resumed by pasting `session-end`'s continuation
-  prompt. Restore it by moving the folder back to the repo root.
+  prompt. Restore it by moving the folder back to the repo root. Retiring
+  doesn't uninstall: `--deploy` never removes a live skill, so delete an
+  existing `~/.claude/skills/session-pickup` by hand.
 
 ### Fixed
 
