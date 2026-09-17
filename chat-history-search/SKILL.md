@@ -172,6 +172,21 @@ grep -n "<term>" <file> | \
 
 Note: if a file uses content-as-array (CLI shape), the verifier needs `"text":"..."` not `"content":"..."`. If audit shape (string), use `"content":"..."`. Try both.
 
+## Corpus 3: Codex Desktop / CLI rollouts (`~/.codex/sessions/`, `~/.codex/archived_sessions/`)
+
+Added 2026-09-16 when the log-mining memories were retired; this is now the only home for these facts.
+
+- Files: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`, with archived copies under `archived_sessions`. Line 1 is `session_meta` (often over 4 KB, so a fixed-size head read fails to parse it): `payload.cwd` is the attribution key; `originator` is `Codex Desktop` when typed input is possible and `codex_exec` when the "user" messages are a headless packet written by a Claude session; `thread_source` is user, subagent or automation; `agent_nickname`, `agent_role` and `parent_thread_id` identify workers. Join `payload.id` against `~/.codex/session_index.jsonl` for thread names.
+- Model per turn: `turn_context.payload.model`. Tokens per API response: `token_usage_record` lines, deduplicated on `payload.response_id`. `event_msg` lines of type `token_count` carry `rate_limits` (the weekly meter, credits balance) and cumulative usage.
+- Filter pseudo-user messages that start with `<environment_context`, `<user_instructions`, `<recommended_plugins`, `<codex_delegation`, `<heartbeat`, `<skill>`, `<scheduled-task` or `<cross-session-message`.
+- Traps: user messages and heartbeat acknowledgements are written twice (dedupe before counting); an automation attached to a thread appends its heartbeat wakes to the ORIGINAL rollout file, so a file dated last week can be live today and an empty day folder does not mean no activity; subagent fan-outs run in `~/.codex/worktrees/<hash>/<repo>` and their commits exist nowhere else until pushed.
+
+## Token accounting (both corpora)
+
+- Claude Code writes one assistant line per content block of one API call; every line of that call carries the same `requestId` and an identical `message.usage`, so summing usage over lines overstates tokens about 2x. Count once per `requestId`. `message.model` names the model that actually ran; `isSidechain` or `agentId` marks a subagent line, and subagent transcripts sit under `<project>/<session-id>/subagents/`.
+- Claude CLI user prompts are partially double-written (about a third of prompts, never more than twice, same text within the same second); dedupe on session, text and timestamp to the second. About one in six surviving `type:"user"` lines is an injected status digest shaped as user text (`Project: ... Git: ... CI: ...`); filter on content, not shape.
+- Every Cowork audit log is named `audit.jsonl`; key sessions by full path or distinct sessions collapse into one.
+
 ## Issues encountered — explicit gotchas to avoid
 
 These cost me time in the original search; calling them out so future-me skips the wrong turns:

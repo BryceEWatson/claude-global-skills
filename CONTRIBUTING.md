@@ -121,8 +121,8 @@ Notes:
 
 ## Privacy rule (non-negotiable)
 
-Several skills (`chat-history-search`, `transcript-analysis`,
-`pattern-retrospective`, `global-review-loop`) mine the user's **private local
+Several skills (`chat-history-search`, `pattern-retrospective`,
+`global-review-loop`) mine the user's **private local
 Claude chat history**. Mined output is written only under each skill's
 git-ignored `.local-state/`, behind a fail-closed guard
 (`global-review-loop/lib/_guards.py::assert_safe_out()`).
