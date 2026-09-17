@@ -48,7 +48,8 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
 - `~/.claude/skills/weekly-work-log/weekly-pr-guard.cjs` — the preflight check for an open
   weekly or backfill PR. This week's weekly PR, opened on or after the Sunday that ends this
   run's week (Pacific) and still open or already merged: quiet success (`PR_ALREADY_OPEN` or
-  `MERGED`), so a second firing never publishes the week twice. An open PR opened before that
+  `MERGED`), so a second firing never publishes the week twice; if the first firing left a
+  `HELD` or `PR_OPENED` verdict on that same PR, the guard keeps it so Monday still asks. An open PR opened before that
   Sunday (anything seven or more days old, or a PR a late-starting run opened mid-week), or any
   open backfill PR: failure `STALE_WEEKLY_PR` with the PR's link, which Monday raises to Bryce. Before
   2026-09-17 an open PR was always a success, which is how PR 112 blocked four weeks unseen.
