@@ -147,6 +147,13 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   syntax error, and `sync.py --deploy` would copy the CRLF bytes into the live
   tree without `--check` noticing, since it compares with line endings
   normalized.
+- **`chat-history-search` now covers Codex session logs and token counting.**
+  Captured from the live copy. A new "Corpus 3" section says where Codex
+  Desktop and CLI keep their session files, which fields name the project,
+  model and token use, and the traps (messages written twice, automations that
+  append to an old file). A new "Token accounting" section explains why summing
+  Claude Code usage line by line counts tokens about twice, and how to
+  deduplicate prompts. The README row now mentions the Codex logs.
 
 ### Removed
 
@@ -156,6 +163,13 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   prompt. Restore it by moving the folder back to the repo root. Retiring
   doesn't uninstall: `--deploy` never removes a live skill, so delete an
   existing `~/.claude/skills/session-pickup` by hand.
+- **`transcript-analysis` is retired** and moved to
+  `retired/transcript-analysis/`. It left `~/.claude/skills` in the 2026-09-06
+  cleanup, whose audit recorded it as never invoked, but it stayed at the repo
+  root, so `sync.py --deploy` would have put it back. It's gone from the README
+  skill table, the issue template dropdowns, and the privacy lists in
+  `README.md`, `CONTRIBUTING.md`, `SECURITY.md` and `SKILL-SPEC.md`. Use
+  `pattern-retrospective` for pattern mining across sessions.
 
 ### Fixed
 

@@ -30,8 +30,8 @@ contain no real private data.
 
 ## Data handling
 
-Several skills (`chat-history-search`, `transcript-analysis`,
-`pattern-retrospective`, `global-review-loop`) **mine your private local Claude
+Several skills (`chat-history-search`, `pattern-retrospective`,
+`global-review-loop`) **mine your private local Claude
 history** — your past prompts and conversations. How that data is contained:
 
 - **Mined data stays under each skill's `.local-state/`**, which is **git-ignored**

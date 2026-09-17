@@ -41,7 +41,7 @@ after copying. See each skill's section below.
 |---|---|
 | [`review-loop`](review-loop/) | Dispatches a multi-agent review team over your session's diff, runs an execution-grounded lint/test/build check, validates each finding through a falsifier stage, and posts a commit-pinned verdict on the PR. Four lens sets by artifact type: code, plans, analytical claims, and finished deliverables (whether the human it's handed to can actually use it). Ships a Stop-hook + installer. |
 | [`gemini-image`](gemini-image/) | Generate and edit images via Google's Gemini API from one zero-dependency Python CLI — reference-image input, multi-image output, safety-block diagnostics, best-available-model selection. |
-| [`chat-history-search`](chat-history-search/) | Exhaustively search your local Claude history across both corpora (Claude Code CLI + Cowork/Desktop) — knows every log location and the false-positive gotchas (task-notifications, TodoWrite items, tool results) that trip up naive grep. |
+| [`chat-history-search`](chat-history-search/) | Exhaustively search your local Claude history (Claude Code CLI + Cowork/Desktop), plus Codex Desktop/CLI session logs. Knows every log location and the false-positive gotchas (task-notifications, TodoWrite items, tool results) that trip up naive grep. |
 | [`pattern-retrospective`](pattern-retrospective/) | Mine your transcripts for recurring patterns with real rigor: audit-the-target-first discipline, streaming JSONL parse, 5-tuple extraction with provenance, self-falsification, and Krippendorff-α inter-rater checks. |
 | [`session-end`](session-end/) | Close out a session into an evidence-grounded record (decisions, claims + verification, assumptions, artifacts, reversals), gathered by one read-only probe script. Mid-flight, it also emits a ready-to-paste continuation prompt that ends with a reconcile block, so the next session checks the handoff against current git state before acting. When everything already sits in pull requests, it closes light with no handoff file. |
 | [`monitor-agent-thread`](monitor-agent-thread/) | Watch a live or recent Claude Code **or** Codex session from the other product via local session logs, with a safe projection that never exposes hidden reasoning, raw tool arguments, signatures, encrypted content, or secrets. The first **dual-target** skill (Claude + Codex). |
@@ -55,7 +55,6 @@ domains, and assumptions to yours.
 
 | Skill | What it does |
 |---|---|
-| [`transcript-analysis`](transcript-analysis/) | Single-project transcript miner → proposes that project's `CLAUDE.md` candidates. The single-project sibling of `global-review-loop`. |
 | [`seo-index-validation`](seo-index-validation/) | Probe a deployed site's crawl/index health (status codes, redirects, soft-404, sitemap, GSC) and diagnose why pages aren't indexed. A no-auth `bash`+`curl` script plus a playbook. |
 | [`global-review-loop`](global-review-loop/) | Mine your whole fleet's history for friction that recurs across projects, then propose global `~/.claude` changes — reconciled against what already ships and self-validated by an adversarial claim loop. (Wired to a project registry; see its SKILL.md.) |
 | [`chat-arch-thrash-detect`](chat-arch-thrash-detect/) | A `PostToolUse` hook that nudges when a session falls into edit-thrash / read-loop / test-loop / tool-flail spirals. Hook host (not slash-invoked); ships its installer. |
@@ -66,13 +65,15 @@ domains, and assumptions to yours.
 >
 > Retired skills live under [`retired/`](retired/), which the sync tool never
 > deploys, checks or captures. `session-pickup` moved there on 2026-09-16; its reconcile
-> rules now ride in the continuation prompt `session-end` emits. Retiring doesn't
-> uninstall: if you already have `~/.claude/skills/session-pickup`, delete it by hand.
+> rules now ride in the continuation prompt `session-end` emits. `transcript-analysis`
+> followed on 2026-09-17; use `pattern-retrospective` for pattern mining across sessions.
+> Retiring doesn't uninstall: if you already have either one under `~/.claude/skills/`,
+> delete it by hand.
 
 ## Privacy & safety
 
-Several skills (`chat-history-search`, `transcript-analysis`,
-`pattern-retrospective`, `global-review-loop`) read your **private local Claude
+Several skills (`chat-history-search`, `pattern-retrospective`,
+`global-review-loop`) read your **private local Claude
 chat history**. That data is written only under each skill's git-ignored
 `.local-state/`, behind a fail-closed guard that refuses to write into your
 `~/.claude` config or any git working tree — so mined data can't land in a tracked

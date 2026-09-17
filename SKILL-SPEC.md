@@ -166,8 +166,7 @@ fallback shape, and you should expect to justify it in review.
 ## 4. Privacy rule for chat-mining skills
 
 Several skills mine the user's **private local Claude chat history**
-(`chat-history-search`, `transcript-analysis`, `pattern-retrospective`,
-`global-review-loop`). Any skill that reads that corpus is held to a hard
+(`chat-history-search`, `pattern-retrospective`, `global-review-loop`). Any skill that reads that corpus is held to a hard
 privacy contract:
 
 1. **Route every corpus/derived write through the fail-closed guard.** Use
