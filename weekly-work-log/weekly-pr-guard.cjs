@@ -35,11 +35,13 @@
 
 const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const REPO = 'BryceEWatson/brycewatson.com';
 const HEAD_PREFIXES = ['work-log/weekly-', 'work-log/backfill-'];
-const WORK_LOG_DATA = /^src\/data\/(work-log\.source\.json|work-log\.json|goals\.json|reports\/)/;
+const WORK_LOG_DATA = /^(src\/data\/(work-log\.source\.json|work-log\.json|goals\.json|reports\/)|data\/weekly-candidates\/)/;
+const DEFAULT_STATE_DIR = path.join(os.homedir(), '.claude', 'scheduled-tasks', 'weekly-work-log');
 const TIME_ZONE = 'America/Los_Angeles';
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -83,8 +85,11 @@ function calendarDaysBetween(fromInstant, toInstant) {
   return Math.round((to - from) / 86400000);
 }
 
+// A weekly branch counts on its name alone (a week can change only candidates or the ledger).
+// A backfill branch must touch work-log data or candidates.
 function isWeeklyPr(pr) {
   const head = String(pr.headRefName || '');
+  if (head.startsWith('work-log/weekly-')) return true;
   if (!HEAD_PREFIXES.some((prefix) => head.startsWith(prefix))) return false;
   return (pr.files || []).some((f) => WORK_LOG_DATA.test(f.path || f));
 }
@@ -136,12 +141,26 @@ function listPrs() {
   return [...open, ...merged];
 }
 
+// The previous finished run's HELD or PR_OPENED verdict on this same open PR, if any.
+function carriedVerdict(stateDir, pr) {
+  if (pr.state !== 'OPEN') return null;
+  try {
+    const prev = JSON.parse(fs.readFileSync(path.join(stateDir, 'last-run.json'), 'utf8')).previous;
+    if (prev && String(prev.prNumber) === String(pr.number) && ['HELD', 'PR_OPENED'].includes(prev.outcome)) return prev;
+  } catch { /* no record: nothing to carry */ }
+  return null;
+}
+
 function record(result, stateDir) {
   const runState = path.join(__dirname, 'run-state.cjs');
   const extra = stateDir ? ['--state-dir', stateDir] : [];
   let args;
   if (result.verdict === 'FRESH') {
-    args = ['success', '--outcome', result.pr.state === 'MERGED' ? 'MERGED' : 'PR_ALREADY_OPEN', '--pr-url', result.pr.url, '--pr-number', String(result.pr.number)];
+    // A second firing must not erase the first firing's verdict on the same PR: a HELD or
+    // PR_OPENED result is what makes Monday ask Bryce, so carry it forward unchanged.
+    const carried = carriedVerdict(stateDir || DEFAULT_STATE_DIR, result.pr);
+    const outcome = carried ? carried.outcome : result.pr.state === 'MERGED' ? 'MERGED' : 'PR_ALREADY_OPEN';
+    args = ['success', '--outcome', outcome, ...(carried?.message ? ['--message', carried.message] : []), '--pr-url', result.pr.url, '--pr-number', String(result.pr.number)];
   } else if (result.verdict === 'STALE') {
     args = ['fail', '--reason-code', 'STALE_WEEKLY_PR', '--message', result.message, '--pr-url', result.pr.url, '--pr-number', String(result.pr.number)];
   } else if (result.verdict === 'ERROR') {

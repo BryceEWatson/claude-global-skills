@@ -131,9 +131,37 @@ test('a backfill PR that only changes the report archive and goals still counts'
   assert.equal(evaluate([pr], { now: SUNDAY_RUN }).verdict, 'STALE');
 });
 
-test('a work-log branch that touches no work-log data is not a weekly PR', () => {
-  const pr = weeklyPr(152, '2026-08-01T00:00:00Z', 'work-log/weekly-2026-08-01', [{ path: 'README.md' }]);
-  assert.equal(evaluate([pr], { now: SUNDAY_RUN }).verdict, 'CLEAR');
+test('a backfill branch that touches no work-log data is not a weekly PR, but a weekly branch always is', () => {
+  const backfill = weeklyPr(152, '2026-08-01T00:00:00Z', 'work-log/backfill-2026-08-01', [{ path: 'README.md' }]);
+  assert.equal(evaluate([backfill], { now: SUNDAY_RUN }).verdict, 'CLEAR');
+  const candidatesOnly = { ...weeklyPr(153, '2026-09-21T05:04:00Z', 'work-log/weekly-2026-09-20', [{ path: 'data/weekly-candidates/2026-09-14.json' }]), state: 'MERGED' };
+  assert.equal(evaluate([candidatesOnly], { now: '2026-09-21T06:00:00Z' }).verdict, 'FRESH');
+});
+
+test('a second firing keeps the first firing\'s HELD verdict on the same open PR', () => {
+  const runState = path.resolve(__dirname, '..', 'run-state.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'weekly-pr-guard-held-'));
+  try {
+    const rs = (...args) => spawnSync(process.execPath, [runState, ...args, '--state-dir', dir], { encoding: 'utf8' });
+    rs('start');
+    rs('success', '--outcome', 'HELD', '--message', 'the advisory raised 1 flag(s)', '--pr-url', 'https://github.com/BryceEWatson/brycewatson.com/pull/160', '--pr-number', '160');
+    rs('start'); // the catch-up firing records its start first, as the prompt says
+    const prsFile = path.join(dir, 'prs.json');
+    fs.writeFileSync(prsFile, JSON.stringify([weeklyPr(160, '2026-09-21T05:04:00Z')]));
+    const r = spawnSync(process.execPath, [script, '--prs-json', prsFile, '--now', '2026-09-21T09:00:00Z', '--state-dir', dir, '--record'], { encoding: 'utf8' });
+    assert.equal(r.status, 10);
+    const state = JSON.parse(fs.readFileSync(path.join(dir, 'last-run.json'), 'utf8'));
+    assert.equal(state.outcome, 'HELD');
+    assert.equal(state.message, 'the advisory raised 1 flag(s)');
+    assert.equal(state.prNumber, '160');
+    // A HELD verdict on a different PR is not carried.
+    rs('start');
+    fs.writeFileSync(prsFile, JSON.stringify([weeklyPr(161, '2026-09-21T05:30:00Z')]));
+    spawnSync(process.execPath, [script, '--prs-json', prsFile, '--now', '2026-09-21T09:00:00Z', '--state-dir', dir, '--record'], { encoding: 'utf8' });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'last-run.json'), 'utf8')).outcome, 'PR_ALREADY_OPEN');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('unreadable PR data is ERROR and persists PR_LIST_FAILED, never a success', () => {

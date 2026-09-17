@@ -57,8 +57,9 @@ To raise something to Bryce, use the ask skill (label, @mention, toast, Slack li
 - If `last-run.json` has a `prNumber`, that is the PR. Otherwise use the newest open PR whose
   headRefName begins `work-log/weekly-` or `work-log/backfill-` (there is no title fallback).
 - Verify the PR is open, its head begins with one of those prefixes, and its changed files
-  include a work-log data file (`src/data/work-log.source.json`, `src/data/work-log.json`,
-  `src/data/goals.json`, or a file under `src/data/reports/`).
+  include a work-log file (`src/data/work-log.source.json`, `src/data/work-log.json`,
+  `src/data/goals.json`, a file under `src/data/reports/`, or a file under
+  `data/weekly-candidates/`).
 - If no verified candidate exists, STOP without killing an existing server or touching a
   preview worktree, and report "No verified weekly work-log PR is open."
 
@@ -87,9 +88,8 @@ To raise something to Bryce, use the ask skill (label, @mention, toast, Slack li
 - For case 4 (HELD), ask on the PR: "Weekly PR <n> is held: <first reason, in plain words>.
   Preview at http://localhost:4321/now. Say merge <n> or hold <n>." If the PR carries a
   candidates file that is not two skips, add the candidate reply line from step 3 to the same
-  ask. For case 6 with outcome `PR_OPENED`, ask the same with "opened without a merge verdict".
-  For `PR_ALREADY_OPEN`, a second firing found this week's PR already open; report it without a
-  second ask.
+  ask. For case 6 (`PR_OPENED` or `PR_ALREADY_OPEN`), ask the same with "opened without a merge
+  verdict", unless the PR already carries the `needs-bryce` label (someone already asked).
 
 ## 5. Report
 - Lead with what needs Bryce, if anything, and the word that clears it; then what went live or

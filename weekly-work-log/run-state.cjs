@@ -73,6 +73,22 @@ for (const [key, flag, max] of [
   if (value) record[key] = value;
 }
 
+// A new run keeps the last finished run's result under `previous`, so a second firing that
+// stops early (weekly-pr-guard.cjs) can carry a HELD or PR_OPENED verdict forward instead of
+// erasing the only record Monday reads. A crashed run (still `running`) passes its own
+// `previous` along.
+if (mode === 'start' && previous) {
+  const finished = previous.status === 'running' ? previous.previous : previous;
+  if (finished && typeof finished === 'object') {
+    const kept = {};
+    for (const key of ['status', 'outcome', 'reasonCode', 'message', 'prUrl', 'prNumber', 'startedAt', 'completedAt']) {
+      const value = clean(typeof finished[key] === 'string' ? finished[key] : null, key === 'message' || key === 'prUrl' ? 500 : 80);
+      if (value) kept[key] = value;
+    }
+    if (Object.keys(kept).length) record.previous = kept;
+  }
+}
+
 if (mode !== 'start') record.completedAt = now;
 
 if (mode === 'success') {

@@ -214,8 +214,10 @@ quality) and steadier blog posting. Everything here goes in one file,
    (`gh pr list --repo BryceEWatson/brycewatson.com --state merged --limit 30 --json number,headRefName,mergedAt`)
    and take the one with the latest `mergedAt` whose head starts `work-log/weekly-`. Find its
    candidates file from its own changed files
-   (`gh pr view <n> --repo BryceEWatson/brycewatson.com --json files`, the path matching
-   `data/weekly-candidates/<date>.json`); if it has none, skip this step. Otherwise run
+   (`gh pr view <n> --repo BryceEWatson/brycewatson.com --json files`, paths matching
+   `data/weekly-candidates/<date>.json`). A weekly PR usually carries two: the week before's
+   file, which only picked up collected answers, and the week it reported. Take the one with
+   the latest date. If it has none, skip this step. Otherwise run
    `node scripts/work-log-candidates.mjs collect <that path> --pr <n>`.
    It records only labeled replies from Bryce, one per line (`linkedin: posted`,
    `linkedin: skip`, `post: draft`, `post: revise: <note>`, `post: no`), and ignores a reply to a
