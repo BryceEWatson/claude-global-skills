@@ -93,6 +93,30 @@ test('a PR opened mid-week by a late run is stale at the next Sunday, though und
   assert.equal(r.state.reasonCode, 'STALE_WEEKLY_PR');
 });
 
+test('a second firing after the first one already merged stops quietly and records MERGED', () => {
+  const merged = { ...weeklyPr(144, '2026-09-21T05:04:00Z'), state: 'MERGED' };
+  const r = runGuard([merged], '2026-09-21T06:10:00Z');
+  assert.equal(r.code, 10);
+  assert.equal(r.out.verdict, 'FRESH');
+  assert.equal(r.state.status, 'succeeded');
+  assert.equal(r.state.outcome, 'MERGED');
+  assert.equal(r.state.prNumber, '144');
+});
+
+test('an earlier week that merged, or a closed PR, does not stop this week', () => {
+  const lastWeek = { ...weeklyPr(145, '2026-09-14T05:04:00Z'), state: 'MERGED' };
+  const closed = { ...weeklyPr(146, '2026-09-21T05:04:00Z'), state: 'CLOSED' };
+  assert.equal(evaluate([lastWeek, closed], { now: SUNDAY_RUN }).verdict, 'CLEAR');
+});
+
+test('an open backfill PR opened today still blocks, as a failure rather than a quiet stop', () => {
+  const backfill = weeklyPr(147, '2026-09-20T20:00:00Z', 'work-log/backfill-2026-09-07');
+  const r = runGuard([backfill], SUNDAY_RUN);
+  assert.equal(r.code, 11);
+  assert.equal(r.state.reasonCode, 'STALE_WEEKLY_PR');
+  assert.match(r.state.message, /Backfill PR 147 is open/);
+});
+
 test('the oldest of several weekly PRs decides, and backfill branches count', () => {
   const result = evaluate([
     weeklyPr(150, '2026-09-21T05:05:00Z'),

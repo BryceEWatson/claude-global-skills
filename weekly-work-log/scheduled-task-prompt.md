@@ -34,12 +34,13 @@ Follow `~/.claude/skills/weekly-work-log/SKILL.md` rules exactly. Do these steps
 - Check for an open weekly PR with the guard. It records its own result:
   `node "{{SKILL_HOME}}/weekly-pr-guard.cjs" --record`
   - exit 0 (`CLEAR`): no open weekly PR. Continue.
-  - exit 10 (`FRESH`): a weekly PR opened for this same week is open (a second firing). The
-    guard recorded success `PR_ALREADY_OPEN`. Report it and STOP without creating a duplicate.
+  - exit 10 (`FRESH`): this week's weekly PR already exists, open or already merged (a second
+    firing). The guard recorded success `PR_ALREADY_OPEN` or `MERGED`. Report it and STOP: never
+    draft or publish the same week twice.
   - exit 11 (`STALE`): a weekly or backfill PR opened before this run's week ended is still
-    open, so a week is going uncurated. The guard recorded failure `STALE_WEEKLY_PR` with the
-    PR's link. Report it and STOP. Do not merge, close, or rebase that PR: it was held for a
-    reason Bryce has to see.
+    open, or a backfill PR is open, so a week is going uncurated. The guard recorded failure
+    `STALE_WEEKLY_PR` with the PR's link. Report it and STOP. Do not merge, close, or rebase that
+    PR: it was held for a reason Bryce has to see.
   - exit 2 (`ERROR`): the guard could not list PRs (it recorded `PR_LIST_FAILED`) or could not
     record its verdict (its output has `recordError`). In the second case persist
     `GUARD_RECORD_FAILED` yourself if you can. STOP.
@@ -209,10 +210,13 @@ Twelve-week LinkedIn test (approved 2026-09-10, on the condition the content is 
 quality) and steadier blog posting. Everything here goes in one file,
 `data/weekly-candidates/<weekStart>.json`, which the site never reads.
 
-1. **Collect last week's answers first.** Find the most recent merged PR whose head starts
-   `work-log/weekly-` (`gh pr list --repo BryceEWatson/brycewatson.com --state merged --search "head:work-log/weekly-" --limit 1 --json number,headRefName`).
-   If `data/weekly-candidates/` holds the file for the week that PR reported, run
-   `node scripts/work-log-candidates.mjs collect data/weekly-candidates/<thatWeek>.json --pr <n>`.
+1. **Collect last week's answers first.** List recently merged PRs
+   (`gh pr list --repo BryceEWatson/brycewatson.com --state merged --limit 30 --json number,headRefName,mergedAt`)
+   and take the one with the latest `mergedAt` whose head starts `work-log/weekly-`. Find its
+   candidates file from its own changed files
+   (`gh pr view <n> --repo BryceEWatson/brycewatson.com --json files`, the path matching
+   `data/weekly-candidates/<date>.json`); if it has none, skip this step. Otherwise run
+   `node scripts/work-log-candidates.mjs collect <that path> --pr <n>`.
    It records only labeled replies from Bryce, one per line (`linkedin: posted`,
    `linkedin: skip`, `post: draft`, `post: revise: <note>`, `post: no`), and ignores a reply to a
    side that was a skip. Then remove the ask label from that PR if present:
@@ -221,8 +225,10 @@ quality) and steadier blog posting. Everything here goes in one file,
      site's normal gates:
      `node "C:/Users/Bryce/.claude/board/bin/board.mjs" add --title "Draft the approved post: <card headline>" --repo brycewatson.com --files src/content/blog`
    - A `revise` answer: this week's post card is the revised card (same `changeId`), applying
-     his note, unless that card already has two `revise` verdicts, in which case skip with the
-     reason "the objective needs rechecking before a third card".
+     his note, unless `data/copy-preflight/runs.jsonl` already holds two `revise` rows for that
+     `changeId` (`node scripts/copy-preflight.mjs metrics` lists it under "Objective recheck
+     required"), in which case skip with the reason "the objective needs rechecking before a
+     third card".
 2. **LinkedIn candidate** from this week's items, or an explicit skip. A candidate must meet
    all four parts of the quality bar, or it is a skip, never a weaker post:
    - a receipt: a commit, pull request, or measured number with a link (`receipt.url`);
@@ -280,7 +286,9 @@ holds the merge.)
   WITHOUT `--advisory`" applies ONLY to a non-data `work-log-weekly.mjs` failure (e.g. a
   transient `gh`/network error), and a PR opened that way will hold (no advisory). Retry
   exactly ONCE. If the retry fails, persist `PR_OPEN_FAILED` before stopping.
-- If verified data produced no change, record success `NO_CHANGE` and skip to step 8.
+- If the script reports no change at all (no report data, candidates, ledger, or verdict log
+  changed), record success `NO_CHANGE` and skip to step 8. A PR that carries only candidates or
+  ledger changes is normal and goes through step 7 like any other.
 
 ## 7. Merge gate (the Owner's 2026-09-10 ruling; never merge any other way)
 - Read the PR's head SHA: `gh pr view <n> --repo BryceEWatson/brycewatson.com --json headRefOid`.

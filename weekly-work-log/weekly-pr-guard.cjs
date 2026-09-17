@@ -10,23 +10,26 @@
  * nothing was drafted, and the Monday preview had no failure to show.
  *
  * The rule. Each run reports the week that ends on the most recent Sunday (Pacific; today, if
- * today is Sunday). An open weekly or backfill PR opened on or after that Sunday belongs to this
- * cycle (a second firing of the same run, say) and stops the run quietly. One opened before that
- * Sunday is left over from an earlier week: that is STALE, a failure Monday raises. This covers
- * every PR seven or more days old, and also a PR opened mid-week by a Sunday run that started
- * late, which a plain seven-day limit would let through for another week.
+ * today is Sunday). An open weekly or backfill PR opened before that Sunday is left over from an
+ * earlier week: that is STALE, a failure Monday raises. This covers every PR seven or more days
+ * old, and also a PR opened mid-week by a Sunday run that started late, which a plain seven-day
+ * limit would let through for another week. Any open backfill PR is also STALE: it blocks the
+ * weekly run and is not the run's own PR. A weekly PR opened on or after that Sunday, still open
+ * or already merged, means this week already ran (a second firing), so the run stops quietly
+ * instead of drafting and publishing the week a second time.
  *
  * Verdicts (exit code):
- *   CLEAR  (0)  no open weekly PR; the run continues
- *   FRESH  (10) an open weekly PR from this cycle; the run stops quietly (success)
- *   STALE  (11) an open weekly PR from an earlier cycle; the run stops as a failure
- *   ERROR  (2)  could not read the open PRs, or could not record the result
+ *   CLEAR  (0)  nothing blocks the run; it continues
+ *   FRESH  (10) this week's weekly PR already exists (open or merged); the run stops quietly
+ *   STALE  (11) an open PR from an earlier week, or an open backfill PR; the run stops as a failure
+ *   ERROR  (2)  could not read the PRs, or could not record the result
  *
  * Usage:
  *   node weekly-pr-guard.cjs [--record] [--now ISO] [--prs-json FILE] [--state-dir DIR]
  *
  * --record writes the terminal run state through run-state.cjs (FRESH -> success
- * PR_ALREADY_OPEN, STALE -> fail STALE_WEEKLY_PR, ERROR -> fail PR_LIST_FAILED).
+ * PR_ALREADY_OPEN, or MERGED when it already merged; STALE -> fail STALE_WEEKLY_PR;
+ * ERROR -> fail PR_LIST_FAILED).
  * --prs-json and --state-dir exist for tests; without --prs-json it calls gh.
  */
 
@@ -86,28 +89,51 @@ function isWeeklyPr(pr) {
   return (pr.files || []).some((f) => WORK_LOG_DATA.test(f.path || f));
 }
 
+// `prs` holds every open PR plus recently merged ones (state OPEN or MERGED; a PR without a
+// state counts as open). Order of precedence:
+//   1. any open weekly or backfill PR opened before this run's week ended -> STALE
+//   2. any open backfill PR -> STALE (it blocks the weekly run and is not this run's own PR)
+//   3. a weekly PR opened for this week, open or already merged -> FRESH (a second firing; quiet)
+//   4. otherwise CLEAR
 function evaluate(prs, { now = new Date().toISOString() } = {}) {
   const weekEnd = reportWeekEnd(now);
   const weekly = (prs || []).filter(isWeeklyPr)
-    .map((pr) => ({ number: pr.number, url: pr.url, headRefName: pr.headRefName, createdAt: pr.createdAt, openedOn: pacificDate(pr.createdAt), ageDays: calendarDaysBetween(pr.createdAt, now) }))
+    .map((pr) => ({
+      number: pr.number, url: pr.url, headRefName: pr.headRefName, createdAt: pr.createdAt,
+      state: String(pr.state || 'OPEN').toUpperCase(),
+      openedOn: pacificDate(pr.createdAt), ageDays: calendarDaysBetween(pr.createdAt, now),
+    }))
     .sort((a, b) => a.openedOn.localeCompare(b.openedOn));
-  if (weekly.length === 0) return { verdict: 'CLEAR', weekEnd, prs: [] };
-  const oldest = weekly[0];
-  if (oldest.openedOn < weekEnd) {
+  const open = weekly.filter((pr) => pr.state === 'OPEN');
+  const oldOpen = open.find((pr) => pr.openedOn < weekEnd);
+  if (oldOpen) {
     return {
-      verdict: 'STALE',
-      weekEnd,
-      pr: oldest,
-      prs: weekly,
-      message: `Weekly work-log PR ${oldest.number} has been open since ${oldest.openedOn} (${oldest.ageDays} days), before this run's week ended on ${weekEnd}, so this week was not drafted. Land or close it.`,
+      verdict: 'STALE', weekEnd, pr: oldOpen, prs: weekly,
+      message: `Weekly work-log PR ${oldOpen.number} has been open since ${oldOpen.openedOn} (${oldOpen.ageDays} days), before this run's week ended on ${weekEnd}, so this week was not drafted. Land or close it.`,
     };
   }
-  return { verdict: 'FRESH', weekEnd, pr: oldest, prs: weekly, message: `Weekly work-log PR ${oldest.number} was opened for this week on ${oldest.openedOn}; not opening a duplicate.` };
+  const openBackfill = open.find((pr) => pr.headRefName.startsWith('work-log/backfill-'));
+  if (openBackfill) {
+    return {
+      verdict: 'STALE', weekEnd, pr: openBackfill, prs: weekly,
+      message: `Backfill PR ${openBackfill.number} is open, so this week was not drafted on top of it. Land or close it, then rerun.`,
+    };
+  }
+  const thisWeek = weekly.find((pr) => pr.headRefName.startsWith('work-log/weekly-') && pr.openedOn >= weekEnd && ['OPEN', 'MERGED'].includes(pr.state));
+  if (thisWeek) {
+    return {
+      verdict: 'FRESH', weekEnd, pr: thisWeek, prs: weekly,
+      message: `Weekly work-log PR ${thisWeek.number} was already ${thisWeek.state === 'MERGED' ? 'merged' : 'opened'} for this week; not running again.`,
+    };
+  }
+  return { verdict: 'CLEAR', weekEnd, prs: weekly };
 }
 
-function listOpenPrs() {
-  const out = execFileSync('gh', ['pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '200', '--json', 'number,url,headRefName,createdAt,files'], { encoding: 'utf8' });
-  return JSON.parse(out);
+function listPrs() {
+  const fields = 'number,url,headRefName,createdAt,state,files';
+  const open = JSON.parse(execFileSync('gh', ['pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '200', '--json', fields], { encoding: 'utf8' }));
+  const merged = JSON.parse(execFileSync('gh', ['pr', 'list', '--repo', REPO, '--state', 'merged', '--limit', '30', '--json', fields], { encoding: 'utf8' }));
+  return [...open, ...merged];
 }
 
 function record(result, stateDir) {
@@ -115,7 +141,7 @@ function record(result, stateDir) {
   const extra = stateDir ? ['--state-dir', stateDir] : [];
   let args;
   if (result.verdict === 'FRESH') {
-    args = ['success', '--outcome', 'PR_ALREADY_OPEN', '--pr-url', result.pr.url, '--pr-number', String(result.pr.number)];
+    args = ['success', '--outcome', result.pr.state === 'MERGED' ? 'MERGED' : 'PR_ALREADY_OPEN', '--pr-url', result.pr.url, '--pr-number', String(result.pr.number)];
   } else if (result.verdict === 'STALE') {
     args = ['fail', '--reason-code', 'STALE_WEEKLY_PR', '--message', result.message, '--pr-url', result.pr.url, '--pr-number', String(result.pr.number)];
   } else if (result.verdict === 'ERROR') {
@@ -134,7 +160,7 @@ function main() {
   try {
     stateDir = option('state-dir');
     const prsJson = option('prs-json');
-    const prs = prsJson ? JSON.parse(fs.readFileSync(prsJson, 'utf8')) : listOpenPrs();
+    const prs = prsJson ? JSON.parse(fs.readFileSync(prsJson, 'utf8')) : listPrs();
     result = evaluate(prs, { now: option('now') || new Date().toISOString() });
   } catch (error) {
     result = { verdict: 'ERROR', message: `Could not list open pull requests: ${String(error.message).split('\n')[0]}` };
