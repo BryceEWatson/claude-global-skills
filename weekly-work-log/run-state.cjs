@@ -10,8 +10,8 @@
  *
  * Usage:
  *   node run-state.cjs start [--worktree PATH] [--week-start YYYY-MM-DD] [--week-end YYYY-MM-DD]
- *   node run-state.cjs success [--outcome PR_OPENED|NO_CHANGE] [--pr-url URL] [--pr-number N]
- *   node run-state.cjs fail --reason-code CODE --message TEXT
+ *   node run-state.cjs success [--outcome PR_OPENED|MERGED|HELD|NO_CHANGE|PR_ALREADY_OPEN] [--pr-url URL] [--pr-number N]
+ *   node run-state.cjs fail --reason-code CODE --message TEXT [--pr-url URL] [--pr-number N]
  *
  * Tests may override the destination with --state-dir PATH.
  */
@@ -73,10 +73,29 @@ for (const [key, flag, max] of [
   if (value) record[key] = value;
 }
 
+// A new run keeps the last finished run's result under `previous`, so a second firing that
+// stops early (weekly-pr-guard.cjs) can carry a HELD or PR_OPENED verdict forward instead of
+// erasing the only record Monday reads. A crashed run (still `running`) passes its own
+// `previous` along.
+if (mode === 'start' && previous) {
+  const finished = previous.status === 'running' ? previous.previous : previous;
+  if (finished && typeof finished === 'object') {
+    const kept = {};
+    for (const key of ['status', 'outcome', 'reasonCode', 'message', 'prUrl', 'prNumber', 'startedAt', 'completedAt']) {
+      const value = clean(typeof finished[key] === 'string' ? finished[key] : null, key === 'message' || key === 'prUrl' ? 500 : 80);
+      if (value) kept[key] = value;
+    }
+    if (Object.keys(kept).length) record.previous = kept;
+  }
+}
+
 if (mode !== 'start') record.completedAt = now;
 
 if (mode === 'success') {
   record.outcome = clean(option('outcome'), 80) || 'PR_OPENED';
+  // HELD carries the merge gate's reasons so Monday can say why without re-running it.
+  const note = clean(option('message'), 500);
+  if (note) record.message = note;
   const prUrl = clean(option('pr-url'), 500);
   const prNumber = clean(option('pr-number'), 20);
   if (prUrl) record.prUrl = prUrl;
@@ -89,6 +108,12 @@ if (mode === 'fail') {
   if (!reasonCode || !message) fail('fail requires --reason-code and --message.');
   record.reasonCode = reasonCode;
   record.message = message;
+  // A failure can be about a specific PR (a stale weekly PR, a held merge); keep its link so
+  // the Monday preview can raise the ask on that PR.
+  const prUrl = clean(option('pr-url'), 500);
+  const prNumber = clean(option('pr-number'), 20);
+  if (prUrl) record.prUrl = prUrl;
+  if (prNumber) record.prNumber = prNumber;
 }
 
 fs.mkdirSync(stateDir, { recursive: true });

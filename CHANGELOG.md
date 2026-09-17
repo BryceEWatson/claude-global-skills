@@ -9,6 +9,20 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+### Changed
+
+- **`weekly-work-log`: an old open weekly PR is now a failure, and the weekly PR can merge
+  itself through a gate.** The Sunday preflight recorded an open weekly PR as a success, so
+  PR 112 (open from 17 August) stopped four Sunday runs in seconds with nothing surfaced.
+  `weekly-pr-guard.cjs` now fails a weekly PR opened before the Sunday that ends the run's week
+  (anything seven or more days old, or opened mid-week by a late run) as `STALE_WEEKLY_PR`,
+  with the PR's link in `last-run.json`, and the Monday preview raises
+  every failure, stale PR, missed run, and held merge through the `ask` skill. Under the
+  Owner's 2026-09-10 ruling the Sunday run waits for CI and lets the site's merge gate merge a
+  green, unflagged week; it also writes a LinkedIn candidate and a post card (or a skip with
+  its reason), collects last week's labeled replies, runs the findings miner that used to run
+  on Thursdays, and drafts through a JSON file so apostrophes survive.
+
 ### Added
 
 - **`review-loop` gains `--mode deliverable` — a review of finished work for
