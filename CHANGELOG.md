@@ -118,6 +118,43 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   It is advice, not a gate: the exit code is unchanged, and the check is
   fail-quiet (no git, untracked file, or any error → silent).
 
+### Changed
+
+- **`session-end` closes light when the work already lives in pull requests,
+  and gathers its evidence in one call.** A full close-out costs about a dozen
+  turns, and none of the handoff's readers need a record of work that git and a
+  PR body already carry. A new Step 0 picks between the full record (work in
+  flight, or decisions and findings not written down anywhere else) and a light
+  close (links plus the stop marker in chat, no handoff file), and defaults to
+  the full record when unsure. Step 1 now runs `session-end/probe.sh`, a
+  read-only script that prints the primary checkout, branch, status, the
+  window's commits, this author's merged and recently updated open pull
+  requests, the handoff path with its timestamp and random token filled in, the
+  origin stamp, whether the handoffs folder is ignored, and the project's
+  close-out contract. It never runs `git fetch`, writes files, or switches a
+  checkout; its only network calls are read-only `gh pr list` queries. Outside a
+  git repository it says so and tells the session to emit the record in chat.
+- **Every continuation prompt now ends with a reconcile block** (`session-end`
+  Step 5, item 7): check the handoff's branch stamp, compare the files it calls
+  in progress against current git state, treat `[derived]`, `[assumed]` and
+  `[unverified]` claims as unchecked, and confirm before side effects. These are
+  the rules `session-pickup` used to apply, moved to where resuming sessions
+  actually read them.
+- `ship-it` no longer names `session-pickup` as its resume path.
+- `.gitattributes` pins `*.sh` to LF endings. With `core.autocrlf=true` a Windows
+  checkout otherwise rewrites shell scripts to CRLF. Git for Windows' `sh`
+  tolerates that, but a standard POSIX `sh` (Linux, macOS, WSL) stops with a
+  syntax error, and `sync.py --deploy` would copy the CRLF bytes into the live
+  tree without `--check` noticing, since it compares with line endings
+  normalized.
+
+### Removed
+
+- **`session-pickup` is retired** and moved to `retired/session-pickup/`, which
+  `sync.py` never deploys. Across every project's chat logs it had run 7 times,
+  against 25 sessions that resumed by pasting `session-end`'s continuation
+  prompt. Restore it by moving the folder back to the repo root.
+
 ### Fixed
 
 - **`session-end` wrote its handoff into a directory that gets deleted.** Step 4

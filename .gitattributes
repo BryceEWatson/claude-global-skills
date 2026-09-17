@@ -1,0 +1,4 @@
+# Shell scripts keep LF endings. core.autocrlf=true rewrites them to CRLF on a Windows
+# checkout; Git for Windows sh tolerates that, but a standard POSIX sh (Linux, macOS, WSL)
+# fails with a syntax error, and sync.py --deploy would copy the CRLF bytes live.
+*.sh text eol=lf
