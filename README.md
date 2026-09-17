@@ -66,7 +66,7 @@ domains, and assumptions to yours.
 > Retired skills live under [`retired/`](retired/), which the sync tool never
 > deploys, checks or captures. `session-pickup` moved there on 2026-09-16; its reconcile
 > rules now ride in the continuation prompt `session-end` emits. `transcript-analysis`
-> followed on 2026-09-17; use `pattern-retrospective` for pattern mining across sessions.
+> (retired 2026-09-06) moved there on 2026-09-17; use `pattern-retrospective` for pattern mining across sessions.
 > Retiring doesn't uninstall: if you already have either one under `~/.claude/skills/`,
 > delete it by hand.
 

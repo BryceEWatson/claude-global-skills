@@ -166,8 +166,8 @@ fallback shape, and you should expect to justify it in review.
 ## 4. Privacy rule for chat-mining skills
 
 Several skills mine the user's **private local Claude chat history**
-(`chat-history-search`, `pattern-retrospective`, `global-review-loop`). Any skill that reads that corpus is held to a hard
-privacy contract:
+(`chat-history-search`, `pattern-retrospective`, `global-review-loop`). Any
+skill that reads that corpus is held to a hard privacy contract:
 
 1. **Route every corpus/derived write through the fail-closed guard.** Use
    `global-review-loop/lib/_guards.py::assert_safe_out()` for any output path.

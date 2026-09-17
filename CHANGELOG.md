@@ -169,7 +169,9 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   root, so `sync.py --deploy` would have put it back. It's gone from the README
   skill table, the issue template dropdowns, and the privacy lists in
   `README.md`, `CONTRIBUTING.md`, `SECURITY.md` and `SKILL-SPEC.md`. Use
-  `pattern-retrospective` for pattern mining across sessions.
+  `pattern-retrospective` for pattern mining across sessions. Retiring doesn't
+  uninstall, so delete an existing `~/.claude/skills/transcript-analysis` by
+  hand.
 
 ### Fixed
 
