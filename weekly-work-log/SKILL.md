@@ -1,6 +1,6 @@
 ---
 name: weekly-work-log
-description: Build and refresh the brycewatson.com "Weekly Work Log" report page (/weekly-report, archived under /log) for the last completed week. Discovers the week's work from session-end handoffs + git, distils it into honest public-voice items, re-derives and verifies every number, and (unattended, every Sunday night via a Claude scheduled task) opens a judgment-assisted review PR. Never publishes unattended.
+description: Build and refresh the brycewatson.com "Weekly Work Log" report page (/weekly-report, archived under /log) for the last completed week. Discovers the week's work from session-end handoffs + git, distils it into honest public-voice items, re-derives and verifies every number, and (unattended, every Sunday night via a Claude scheduled task) opens one PR that merges itself only through a merge gate (Owner ruling 2026-09-10: every deterministic gate green and no advisory flag), plus a LinkedIn candidate and a post card that never publish themselves.
 user-invocable: true
 argument-hint: "[--weekly] [--days N] [--week YYYY-MM-DD]"
 ---
@@ -38,9 +38,17 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
 - `<repo>/scripts/work-log-via-honestweek.mjs` — build (the [honestweek](https://github.com/BryceEWatson/honestweek) engine: verify-or-abort every commit, re-derive + number-fence every number, redact, then write work-log.json + the /log snapshot + index + goals.json). `<repo>/scripts/build-work-log.mjs` is retained as the parity oracle (`scripts/work-log-parity.mjs` proves the two agree on all four artifacts).
 - `<repo>/scripts/work-log-weekly.mjs` — open the review PR (`--advisory <path>` splices the fail-open advisory; never main, never deploy).
 - `<repo>/scripts/lib/work-log-redact.mjs` — shared secret/leak scrubber (the ONE canonical redactor; extend its term lists, never duplicate).
+- `<repo>/scripts/work-log.mjs append <draft.json>` — appends a curated batch written as a JSON file; validates first (including the apostrophe batch check) and never puts prose inside code.
+- `<repo>/scripts/work-log-merge-gate.mjs` — MERGE or HOLD for a weekly PR under the 2026-09-10 ruling: weekly branch, data-only allowlist, green `correctness` on the head, exactly one `advisory-flags: 0` line, no hold marker or label. The only merge path.
+- `<repo>/scripts/work-log-candidates.mjs` — checks, renders, and records Bryce's one-word answers for `data/weekly-candidates/<weekStart>.json` (the LinkedIn candidate and the post card).
 - `~/.claude/skills/weekly-work-log/run-state.cjs` — atomically records a privacy-safe
-  `running` / `succeeded` / `failed` status for the Sunday run. The Monday preview reads
-  this instead of treating every missing PR as a quiet no-op.
+  `running` / `succeeded` / `failed` status for the Sunday run (outcomes `MERGED`, `HELD`,
+  `PR_ALREADY_OPEN`, `NO_CHANGE`). The Monday preview reads this instead of treating every
+  missing PR as a quiet no-op.
+- `~/.claude/skills/weekly-work-log/weekly-pr-guard.cjs` — the preflight check for an open
+  weekly PR. Under seven Pacific calendar days old: quiet success `PR_ALREADY_OPEN`. Seven or
+  more: failure `STALE_WEEKLY_PR` with the PR's link, which Monday raises to Bryce. Before
+  2026-09-17 an open PR was always a success, which is how PR 112 blocked four weeks unseen.
 
 ## Modes
 
@@ -54,7 +62,9 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
   - **Curate every session (distillation):** distil EVERY interactive Claude Code session of the week into `source.json` items so the page shows the full week (the original "curate every session" directive, automated). Done in-context from the redacted digest (not subagents). Private/sensitive sessions are **summarized through the privacy filter, not dropped or stubbed** (display roles: Akaya/Personal/ShopForge — generalized to the kind of work, never git-read; "personal finance is fine, we just need iron clad rules"). Each item is linked to the SPECIFIC goal it advances via `objectiveId` (read `objectives.public.json`) — never leave a multi-goal project like Command to fall through to its catch-all/parent goal, or the goal lens collapses to one bucket; client/private items get no `objectiveId` (they stay off `/goals`). The drafted prose is gated by `work-log-validate-source.mjs` (fails loud on a dash/leak/bad-badge) + a claim-falsification self-check BEFORE the build.
   - **Deterministic backstop:** `work-log-via-honestweek.mjs` (honestweek) git-verifies + number-fences every number (aborts on any unresolved/non-Bryce commit, so NO PR on bad data). Items the job drafts carry `"drafted": "auto-<date>"`.
   - **Fail-open advisory:** judgment that ASSISTS the reviewer (badge-vs-prose, coverage gaps, badge-vs-git, a downgrade-only privacy adjudicator, reversal-coverage) spliced into the PR body, plus the noun-harvester (count only). Any LLM/network/`gh` failure → a single "advisory unavailable" line; never blocks the PR. Advisory may only DOWNGRADE/FLAG.
-  - **The PR is the gate:** auto-DRAFT, human-APPROVE. The run never pushes `main`, never deploys, opens exactly one PR.
+  - **Candidates:** a LinkedIn candidate for the twelve-week test and a one-screen post card (from the week's work or the findings miner), or an explicit skip with the reason for each, in `data/weekly-candidates/<weekStart>.json`. Each candidate carries a receipt, Bryce's voice, a named reader and what they can do after, and honest status, or it is a skip. The run first collects last week's one-word answers from the merged PR.
+  - **Findings miner:** the run executes `honestweek mine` (formerly the Thursday `weekly-publishable-findings` task, now disabled) and commits its ledger in the weekly PR, so declined findings stop coming back.
+  - **Gated self-merge:** the run opens exactly one PR and never pushes `main`. It then waits for CI and runs the merge gate, which merges only under Bryce's 2026-09-10 `auto` ruling ("auto-merge when every deterministic gate passes and the advisory raises no flag", weekly log only). A hold waits for Bryce, and Monday raises it.
 - **`--week YYYY-MM-DD`**: backfill a past completed week's archive (see above). Manual only.
 - **`--days N`**: override the window to a rolling N-day scan (manual broader discovery).
 
@@ -64,7 +74,7 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
 2. **Curate every session** — `node scripts/draft-work-log-sessions.mjs` for the redacted per-session digest, then distil EVERY session into `source.json` items in the plain public voice (private/sensitive sessions summarized through the privacy filter, never dropped — see the rules + the unattended prompt `scheduled-task-prompt.md`). `draft-work-log-proposed.mjs` can give a ranked scaffold to fill. Then `node scripts/work-log-validate-source.mjs` (fails loud on a dash/leak/bad-badge) before building. Obey every rule below; accuracy is the floor even for private.
 3. **Build** — `node scripts/work-log-via-honestweek.mjs` (the honestweek engine). Re-derives every date/number from git, rewrites commit snippets to the real subject, verify-or-aborts all cited commits, number-fences every number, redacts. Writes `work-log.json` (+ snapshot + index + `goals.json`). `build-work-log.mjs` is the parity oracle; `node scripts/work-log-parity.mjs` proves they agree.
 4. **Preview** — `pnpm dev`, open `http://localhost:4321/weekly-report` (archive index at `/log`, goals at `/goals`).
-5. **Ship** — commit the data files. A merge to `main` deploys via CI. (Unattended: `node scripts/work-log-weekly.mjs --advisory <sidecar>` opens the PR instead of committing to main.)
+5. **Ship** — commit the data files. A merge to `main` deploys via CI. (Unattended: `node scripts/work-log-weekly.mjs --advisory <sidecar> --candidates <file>` opens the PR, and `node scripts/work-log-merge-gate.mjs --pr <n> --merge` decides whether it merges.) An operator backfilling several missed weeks may run `work-log-via-honestweek.mjs --week` once per past week and open one consolidated PR; each invocation still regenerates exactly one week.
 
 ## The rules (load-bearing — every run, especially unattended, must honor these)
 
@@ -75,7 +85,10 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
 - **Every number git-verified**: re-derived at build, never hardcoded. A cited commit that does not resolve (or is not Bryce's: `bryceewatson@gmail.com` / `bryceewatson@users.noreply.github.com`) aborts the build. Item dates come from the commit, not the prose.
 - **Privacy** (default-deny): only Bryce's OWN repos are read (Command, DemandForge, claude-global-skills, brycewatson.com). Client / no-remote repos (dropKnowledge, etc.) are never read or named. The shared redactor scrubs codenames (plumagedispatch), client names (dropKnowledge / castgryff), vendor + niche names, session UUIDs, home paths, and secrets. **Draft-and-distil, never lift**: handoff prose is operational and leaky; distil it into plain public-voice items, never paste it verbatim. The `.proposed` scaffold and the harvester sidecar are gitignored; never commit them, and never route raw harvested nouns into the PR body (count only).
 - **Structure**: the feed is grouped by project into containers; each project is a card with git-derived metrics (commits this week, active days, entries) + an `archive →` link to `/weekly-report/<project>` (6-month commit history). Dark console aesthetic; the shared site header uses `headerVariant="dark-canvas"`.
-- **The approval gate is the PR**: the unattended run never pushes to `main` and never deploys. It only opens a PR. Bryce reviews + merges; CI deploys the merge. Advisory judgment never gates — it only assists.
+- **The approval gate is the merge gate**: the unattended run never pushes to `main` and never deploys. It opens a PR, and `work-log-merge-gate.mjs` merges it only when every deterministic gate is green and the advisory's single `advisory-flags:` line reads 0; anything else waits for Bryce. An advisory that did not run is a flag, not a clean bill.
+- **Write prose as JSON, never as code**: the 16 August draft lost every apostrophe because its items were authored inside single-quoted JavaScript strings. Write the batch with a file-writing tool and append it with `scripts/work-log.mjs append`.
+- **No digits in curated prose** (titles, summaries, headline, next-up, frontier): the numeric fact fence aborts the build on them.
+- **Run discovery from a sibling checkout** (`C:\Users\Bryce\Projects\brycewatson.com-*`), never from a worktree nested under `.claude\worktrees\`: the digests look for the other repositories one folder up and silently come back empty.
 
 ## Scheduling (every Sunday night) — Claude scheduled task
 
@@ -96,6 +109,16 @@ The unattended weekly run is a **Claude scheduled task** (`mcp__scheduled-tasks`
 - **Failure visibility:** every run starts by writing `last-run.json` under the live
   scheduled-task directory and must write one terminal state. Fetch/worktree setup and a
   non-data PR-open failure retry exactly once; data verification never retries into a PR.
+  An open weekly PR aged seven or more calendar days is a failure (`STALE_WEEKLY_PR`), not
+  a success.
+- **The Monday preview** (`weekly-work-log-preview`, prompt in
+  `preview-scheduled-task-prompt.md`) reads that state. A failure, a stale PR, a missed run,
+  or a held merge is raised to Bryce through the `ask` skill. A merged week becomes a
+  "merged, here's what went live" note with the candidates and one ask for his one-word
+  answers. It launches a localhost preview only for an open PR.
+- **Deploying a prompt change:** edit the prompt in `claude-global-skills`, run
+  `python scripts/sync.py --deploy`, then paste the text below the `---` rule into
+  `update_scheduled_task` for `weekly-work-log` or `weekly-work-log-preview`.
 - **Verification debt**: the run-on-next-launch catch-up is documented, not yet behaviorally proven here. Worth a one-time controlled catch-up test (close the app over a due time, relaunch, confirm fire) before fully trusting it — the `demandforge-verify-cron-first-firing` task is precedent.
 - It **activates once the page is shipped** (the data files are committed). Requires:
   `gh` authenticated and git push credentials. The shared repo may be on any branch and
@@ -104,14 +127,15 @@ The unattended weekly run is a **Claude scheduled task** (`mcp__scheduled-tasks`
 
 ## Safety invariants
 
-- Never push to `main`; never deploy; only ever open a PR. The unattended run opens **exactly one** PR.
+- Never push to `main`; never deploy; never `gh pr merge` directly. The unattended run opens **exactly one** PR, and only `work-log-merge-gate.mjs` may merge it.
 - Never mutate the user's shared checkout. All unattended writes happen in the dedicated
   worktree; every setup or terminal failure is persisted before the task exits.
 - Abort (no PR) if the generator fails verification — never open a PR with unverified data.
+- The LinkedIn candidate and post card never publish, post, or draft a post by themselves. A `draft` answer from Bryce becomes a board item for a session that goes through the site's normal gates.
 - **Advisory is fail-open, but never silently**: any LLM/network/`gh` failure → the "advisory unavailable" line PLUS a line naming which failure it was (not requested / did not run / empty / withheld by the privacy screen). The PR still opens with deterministic data + the human checklist intact. Advisory may only DOWNGRADE/FLAG — never clear-for-publish, never suppress the human leak/voice checklist. A reviewer must always be able to tell a failed advisory from a clean one; an absent advisory is not a clean bill of health.
 - The cron NEVER fires `--week` backfill; the harvester's raw nouns NEVER enter the PR body (count only).
 - Reuse the review-loop `--mode claim` engine/rubric verbatim for the badge-vs-prose checks — read its `agents/claim-*.md` lenses at runtime; do not fork them.
 - **Curate every session, redacted — not dropped, not stubbed.** Private/sensitive sessions are summarized through the privacy filter (display roles never git-read; client→"Akaya", finances→"Personal"; generalized to the kind of work; accuracy is the hard floor even for private). A session you cannot distil confidently gets the most generic HONEST entry, never a fabricated one.
-- **The drafted prose is gated before it builds:** `work-log-validate-source.mjs` fails loud on a dash/leak/bad-badge/git-leak; the iron-clad redactor + the dist-PII scan are the deterministic backstop; the PR is the human gate. Auto-DRAFT, human-APPROVE — never auto-publish in Bryce's voice.
-- The unattended run writes ONLY `work-log.source.*` (its drafted items) + gitignored sidecars; it NEVER hand-writes `work-log.json` / `reports/*` / `goals.json` (the build does, deterministically), never `main`, never deploy.
+- **The drafted prose is gated before it builds:** `work-log-validate-source.mjs` fails loud on a dash/leak/bad-badge/git-leak/apostrophe-free batch; the iron-clad redactor + the dist-PII scan are the deterministic backstop; the merge gate publishes only a green, unflagged week under the 2026-09-10 ruling, and everything else is Bryce's call.
+- The unattended run writes ONLY `work-log.source.*` (its drafted items), `data/weekly-candidates/*`, the findings ledger and the `mine` block of `honestweek.config.json`, and gitignored sidecars; it NEVER hand-writes `work-log.json` / `reports/*` / `goals.json` (the build does, deterministically), never `main`, never deploy.
 - The drafts digest and harvester sidecar are gitignored and redacted; never commit them.

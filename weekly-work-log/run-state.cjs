@@ -10,8 +10,8 @@
  *
  * Usage:
  *   node run-state.cjs start [--worktree PATH] [--week-start YYYY-MM-DD] [--week-end YYYY-MM-DD]
- *   node run-state.cjs success [--outcome PR_OPENED|NO_CHANGE] [--pr-url URL] [--pr-number N]
- *   node run-state.cjs fail --reason-code CODE --message TEXT
+ *   node run-state.cjs success [--outcome PR_OPENED|MERGED|HELD|NO_CHANGE|PR_ALREADY_OPEN] [--pr-url URL] [--pr-number N]
+ *   node run-state.cjs fail --reason-code CODE --message TEXT [--pr-url URL] [--pr-number N]
  *
  * Tests may override the destination with --state-dir PATH.
  */
@@ -77,6 +77,9 @@ if (mode !== 'start') record.completedAt = now;
 
 if (mode === 'success') {
   record.outcome = clean(option('outcome'), 80) || 'PR_OPENED';
+  // HELD carries the merge gate's reasons so Monday can say why without re-running it.
+  const note = clean(option('message'), 500);
+  if (note) record.message = note;
   const prUrl = clean(option('pr-url'), 500);
   const prNumber = clean(option('pr-number'), 20);
   if (prUrl) record.prUrl = prUrl;
@@ -89,6 +92,12 @@ if (mode === 'fail') {
   if (!reasonCode || !message) fail('fail requires --reason-code and --message.');
   record.reasonCode = reasonCode;
   record.message = message;
+  // A failure can be about a specific PR (a stale weekly PR, a held merge); keep its link so
+  // the Monday preview can raise the ask on that PR.
+  const prUrl = clean(option('pr-url'), 500);
+  const prNumber = clean(option('pr-number'), 20);
+  if (prUrl) record.prUrl = prUrl;
+  if (prNumber) record.prNumber = prNumber;
 }
 
 fs.mkdirSync(stateDir, { recursive: true });

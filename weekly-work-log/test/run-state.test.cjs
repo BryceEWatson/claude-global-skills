@@ -56,3 +56,21 @@ test('rejects an incomplete failure record', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a failure about a PR keeps its link, and a held merge keeps its reasons', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'weekly-run-state-'));
+  try {
+    run(dir, 'start');
+    const stale = run(dir, 'fail', '--reason-code', 'STALE_WEEKLY_PR', '--message', 'PR 112 open 28 days', '--pr-url', 'https://example.test/pull/112', '--pr-number', '112');
+    assert.equal(stale.prNumber, '112');
+    assert.equal(stale.prUrl, 'https://example.test/pull/112');
+    run(dir, 'start');
+    const held = run(dir, 'success', '--outcome', 'HELD', '--message', 'the advisory raised 1 flag(s)', '--pr-number', '140');
+    assert.equal(held.status, 'succeeded');
+    assert.equal(held.outcome, 'HELD');
+    assert.equal(held.message, 'the advisory raised 1 flag(s)');
+    assert.equal(held.reasonCode, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
