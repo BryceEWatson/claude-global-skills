@@ -218,7 +218,8 @@ quality) and steadier blog posting. Everything here goes in one file,
    (`gh pr view <n> --repo BryceEWatson/brycewatson.com --json files`, paths matching
    `data/weekly-candidates/<date>.json`). Use only the file for the week that PR reported: its
    branch is `work-log/weekly-<run date>`, and the file is named for the Monday six days before
-   that date. A weekly PR can also carry the week before's file, which only picked up collected
+   the latest Sunday on or before that date (a run that fired late on a Monday still reported
+   the week ending the day before). A weekly PR can also carry the week before's file, which only picked up collected
    answers; never collect into that one. If the reported week's file is not among the PR's
    files, skip this step. Otherwise run
    `node scripts/work-log-candidates.mjs collect <that path> --pr <n>`.
