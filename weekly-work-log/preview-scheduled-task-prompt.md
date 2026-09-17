@@ -56,8 +56,9 @@ To raise something to Bryce, use the ask skill (label, @mention, toast, Slack li
 ### 4a. Verify the PR
 - If `last-run.json` has a `prNumber`, that is the PR. Otherwise use the newest open PR whose
   headRefName begins `work-log/weekly-` or `work-log/backfill-` (there is no title fallback).
-- Verify the PR is open, its head begins with one of those prefixes, and its changed files
-  include a work-log file (`src/data/work-log.source.json`, `src/data/work-log.json`,
+- Verify the PR is open and its head begins with one of those prefixes. A `work-log/weekly-`
+  head counts on its name alone (as the Sunday guard treats it). A `work-log/backfill-` head
+  must also change a work-log file (`src/data/work-log.source.json`, `src/data/work-log.json`,
   `src/data/goals.json`, a file under `src/data/reports/`, or a file under
   `data/weekly-candidates/`).
 - If no verified candidate exists, STOP without killing an existing server or touching a

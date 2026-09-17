@@ -35,7 +35,8 @@ Follow `~/.claude/skills/weekly-work-log/SKILL.md` rules exactly. Do these steps
   `node "{{SKILL_HOME}}/weekly-pr-guard.cjs" --record`
   - exit 0 (`CLEAR`): no open weekly PR. Continue.
   - exit 10 (`FRESH`): this week's weekly PR already exists, open or already merged (a second
-    firing). The guard recorded success `PR_ALREADY_OPEN` or `MERGED`. Report it and STOP: never
+    firing). The guard recorded success `PR_ALREADY_OPEN` or `MERGED`, or carried forward the
+    first firing's `HELD` or `PR_OPENED` verdict on that PR. Report it and STOP: never
     draft or publish the same week twice.
   - exit 11 (`STALE`): a weekly or backfill PR opened before this run's week ended is still
     open, or a backfill PR is open, so a week is going uncurated. The guard recorded failure
@@ -215,9 +216,11 @@ quality) and steadier blog posting. Everything here goes in one file,
    and take the one with the latest `mergedAt` whose head starts `work-log/weekly-`. Find its
    candidates file from its own changed files
    (`gh pr view <n> --repo BryceEWatson/brycewatson.com --json files`, paths matching
-   `data/weekly-candidates/<date>.json`). A weekly PR usually carries two: the week before's
-   file, which only picked up collected answers, and the week it reported. Take the one with
-   the latest date. If it has none, skip this step. Otherwise run
+   `data/weekly-candidates/<date>.json`). Use only the file for the week that PR reported: its
+   branch is `work-log/weekly-<run date>`, and the file is named for the Monday six days before
+   that date. A weekly PR can also carry the week before's file, which only picked up collected
+   answers; never collect into that one. If the reported week's file is not among the PR's
+   files, skip this step. Otherwise run
    `node scripts/work-log-candidates.mjs collect <that path> --pr <n>`.
    It records only labeled replies from Bryce, one per line (`linkedin: posted`,
    `linkedin: skip`, `post: draft`, `post: revise: <note>`, `post: no`), and ignores a reply to a
