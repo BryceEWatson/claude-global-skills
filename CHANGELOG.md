@@ -11,6 +11,15 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Changed
 
+- **`weekly-work-log`: the Monday run checks the live site, and the Sunday run pulls honestweek.**
+  The Monday follow-up now fetches nine key brycewatson.com pages and reads the last deploy
+  before anything else, and raises a failure to Bryce on one standing issue through the `ask`
+  skill, so a broken site is heard about without anyone looking. The Sunday preflight
+  fast-forwards the honestweek checkout it runs the engine and miner from (fail-soft), because
+  nothing else updates it and merged honestweek fixes never reached the run. Also recorded:
+  the 17 September prompts were merged but never loaded into the two scheduled tasks, so the
+  21 September run still used the old guard; both tasks were loaded on 23 September.
+
 - **`weekly-work-log`: an old open weekly PR is now a failure, and the weekly PR can merge
   itself through a gate.** The Sunday preflight recorded an open weekly PR as a success, so
   PR 112 (open from 17 August) stopped four Sunday runs in seconds with nothing surfaced.
