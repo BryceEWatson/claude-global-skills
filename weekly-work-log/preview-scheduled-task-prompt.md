@@ -21,7 +21,9 @@ Every Monday, whatever the Sunday result, check that the live site works:
 - Fetch each of these and require HTTP 200 after redirects:
   `https://brycewatson.com/`, `/about/`, `/blog/`, `/work/`, `/now/`, `/log/`, `/goals/`,
   `/reading/` and `/rss.xml`, for example
-  `curl -sL -o NUL -w "%{http_code}" https://brycewatson.com/about/`. Retry a failure once.
+  `curl.exe -sL --max-time 20 -o NUL -w "%{http_code}" https://brycewatson.com/about/`. Write
+  `curl.exe`, never `curl`: in Windows PowerShell `curl` is an alias for `Invoke-WebRequest`,
+  which rejects these flags and would make every page look down. Retry a failure once.
 - Read the latest deploy on main:
   `gh run list -R BryceEWatson/brycewatson.com --workflow deploy.yml --branch main --limit 1 --json conclusion,url,createdAt`.
   It must be `success`.
