@@ -14,6 +14,27 @@ tell him what went live when nothing does. Never merge, approve, push, close, or
 To raise something to Bryce, use the ask skill (label, @mention, toast, Slack line):
 `node "$HOME/.claude/skills/ask/ask.mjs" brycewatson.com <pr-or-issue-number> "<one plain line: what it is, and the word that clears it>"`
 
+## 0. Is the live site up?
+
+Every Monday, whatever the Sunday result, check that the live site works:
+
+- Fetch each of these and require HTTP 200 after redirects:
+  `https://brycewatson.com/`, `/about/`, `/blog/`, `/work/`, `/now/`, `/log/`, `/goals/`,
+  `/reading/` and `/rss.xml`, for example
+  `curl -sL -o NUL -w "%{http_code}" https://brycewatson.com/about/`. Retry a failure once.
+- Read the latest deploy on main:
+  `gh run list -R BryceEWatson/brycewatson.com --workflow deploy.yml --branch main --limit 1 --json conclusion,url,createdAt`.
+  It must be `success`.
+- If anything failed, find an OPEN issue in BryceEWatson/brycewatson.com titled exactly
+  "brycewatson.com: the Monday site check failed" (match the title, do not use search), or
+  create it with the failing routes, their status codes, and the deploy run link. If it
+  already exists, comment with today's result. Then ask on that issue:
+  "The live site check failed: <routes or the deploy>. Say `fixed` once it is back."
+- If everything passed and that issue is open, comment "All pages return 200 and the last
+  deploy succeeded" with the date, and leave it for Bryce to close.
+- Put one line in the report either way: `Site: all 9 pages 200, last deploy green` or what
+  failed. A site failure never stops the work-log follow-up below.
+
 ## 1. Read the Sunday result
 - Read `C:\Users\Bryce\.claude\scheduled-tasks\weekly-work-log\last-run.json`.
 - From `C:\Users\Bryce\Projects\brycewatson.com`, run `git fetch origin`.
