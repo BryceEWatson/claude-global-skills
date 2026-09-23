@@ -31,6 +31,16 @@ Follow `~/.claude/skills/weekly-work-log/SKILL.md` rules exactly. Do these steps
   require BASE to be on `main` or clean. Never checkout, reset, stash, commit, or clean BASE.
 - From BASE, run `git fetch origin main`. If it fails for a transient network reason,
   retry it exactly ONCE, then stop. Never loop.
+- Bring the honestweek engine current. The miner and `work-log-via-honestweek.mjs` run from
+  the primary checkout `C:\Users\Bryce\Projects\honestweek`, which nothing else fast-forwards,
+  so a merged honestweek fix never reaches this run unless you pull it here:
+  first confirm `git -C C:\Users\Bryce\Projects\honestweek branch --show-current` prints `main`,
+  then run `git -C C:\Users\Bryce\Projects\honestweek pull --ff-only origin main`. Skip the pull
+  on any other branch: a fast-forward would move that branch, not `main`. This is FAIL-SOFT:
+  if it is on another branch or cannot fast-forward (local commits, tracked edits, a network
+  error), do not reset, stash or switch anything there. Continue on the
+  code as it is and put one line in the PR body and the report: "honestweek checkout not
+  updated: <reason>". Untracked scratch files there are normal and do not block the pull.
 - Check for an open weekly PR with the guard. It records its own result:
   `node "{{SKILL_HOME}}/weekly-pr-guard.cjs" --record`
   - exit 0 (`CLEAR`): no open weekly PR. Continue.
