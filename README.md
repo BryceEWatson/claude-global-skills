@@ -2,7 +2,7 @@
 
 A curated collection of [Claude Code](https://claude.com/claude-code) **skills** —
 a multi-agent code-review loop, exhaustive local chat-history search, an
-evidence-grounded session end/resume pair, Gemini image generation, and rigorous
+evidence-grounded session close-out and handoff, Gemini image generation, and rigorous
 transcript retrospectives — that run **machine-wide with nothing but `python` and
 `node`**. No per-project install: drop a skill into `~/.claude/skills/` and invoke
 it as a slash command in any session.
@@ -43,8 +43,7 @@ after copying. See each skill's section below.
 | [`gemini-image`](gemini-image/) | Generate and edit images via Google's Gemini API from one zero-dependency Python CLI — reference-image input, multi-image output, safety-block diagnostics, best-available-model selection. |
 | [`chat-history-search`](chat-history-search/) | Exhaustively search your local Claude history across both corpora (Claude Code CLI + Cowork/Desktop) — knows every log location and the false-positive gotchas (task-notifications, TodoWrite items, tool results) that trip up naive grep. |
 | [`pattern-retrospective`](pattern-retrospective/) | Mine your transcripts for recurring patterns with real rigor: audit-the-target-first discipline, streaming JSONL parse, 5-tuple extraction with provenance, self-falsification, and Krippendorff-α inter-rater checks. |
-| [`session-end`](session-end/) | Close out a session into an evidence-grounded record (decisions, claims + verification, assumptions, artifacts, reversals); mid-flight, also emits a ready-to-paste continuation prompt. |
-| [`session-pickup`](session-pickup/) | The inverse of `session-end`: rehydrate a continued session from the latest handoff, reconciled against current git/file state before acting. |
+| [`session-end`](session-end/) | Close out a session into an evidence-grounded record (decisions, claims + verification, assumptions, artifacts, reversals), gathered by one read-only probe script. Mid-flight, it also emits a ready-to-paste continuation prompt that ends with a reconcile block, so the next session checks the handoff against current git state before acting. When everything already sits in pull requests, it closes light with no handoff file. |
 | [`monitor-agent-thread`](monitor-agent-thread/) | Watch a live or recent Claude Code **or** Codex session from the other product via local session logs, with a safe projection that never exposes hidden reasoning, raw tool arguments, signatures, encrypted content, or secrets. The first **dual-target** skill (Claude + Codex). |
 | [`fable-seat`](fable-seat/) | Operating profile for a session running on Fable (`claude-fable-5`): default effort `high` and step DOWN for routine work rather than reaching for `xhigh`, lead task framing with the outcome, keep the prompt cache warm by farming cheap work to a subagent instead of inline-switching the main model, and budget + compact long runs. A genuine no-op on Opus and every non-Fable model; Fable-mechanics guidance, not a superiority claim. |
 
@@ -64,6 +63,11 @@ domains, and assumptions to yours.
 
 > `session-handoff` is a thin alias that routes to `session-end` (the skill was
 > renamed); `/session-handoff` still works if it's installed.
+>
+> Retired skills live under [`retired/`](retired/), which the sync tool never
+> deploys, checks or captures. `session-pickup` moved there on 2026-09-16; its reconcile
+> rules now ride in the continuation prompt `session-end` emits. Retiring doesn't
+> uninstall: if you already have `~/.claude/skills/session-pickup`, delete it by hand.
 
 ## Privacy & safety
 

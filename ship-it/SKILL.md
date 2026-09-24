@@ -1,5 +1,4 @@
 ---
-targets: [claude]
 name: ship-it
 description: >-
   Take a build task from first read to a shipped, reviewed PR — the full
@@ -147,7 +146,8 @@ manual run didn't already cover (it skips an already-dispatched diff), so the tr
 If context fills at **any** step, invoke `session-end` in mid-flight mode → it writes a durable handoff to
 `.claude/handoffs/` (exact resumable state: last step → next, files in play, pinned scope/plan/done-state,
 verification debts) + a paste-ready continuation prompt, so the build resumes losslessly in a fresh session.
-`session-pickup` is the inverse. A multi-hour build hands off rather than dying half-done.
+The prompt ends with a reconcile block, so the fresh session checks the handoff against current state
+before acting. A multi-hour build hands off rather than dying half-done.
 
 ## Gates / safety
 
@@ -157,13 +157,13 @@ verification debts) + a paste-ready continuation prompt, so the build resumes lo
 - **Scope-cut (Step 6, HARD):** any cut/defer/expand of scope is surfaced for consent — never silent (Build-Complete).
 - **Publish wall (Step 8, HARD):** confirm fresh-branch-off-default + target/title/body before any push or PR.
 - **Definition-of-done (Step 9):** `review-clean` + commit-pinned PR comment + every in-scope item done+tested + docs updated. Treat `exhausted`/`stalled` as unresolved, not done.
-- **Portability:** name only the GLOBAL `/review-loop`, native plan mode/`ExitPlanMode`/`Agent`/`AskUserQuestion`, `session-end`/`session-pickup`. Discover/describe everything else generically.
+- **Portability:** name only the GLOBAL `/review-loop`, native plan mode/`ExitPlanMode`/`Agent`/`AskUserQuestion`, `session-end`. Discover/describe everything else generically.
 - **Match rigor to size:** a one-file fix needn't fan out 5 agents or run two full loops — scale the ceremony to the change. Concurrent builds in one repo collide on `/review-loop`'s per-repo lock; use a worktree per session.
 
 ## Complements (not duplicates)
 
 `/review-loop` is one **segment** (review only) — `ship-it` invokes it at two checkpoints (plan + PR) and
-loops on its verdict. `session-end`/`session-pickup` are session **lifecycle** (close/resume), used here only
+loops on its verdict. `session-end` is session **lifecycle** (close, and hand off when mid-flight), used here only
 as the mid-build escape hatch. The analysis/mining skills (`pattern-retrospective`, `transcript-analysis`,
 `chat-history-search`, `global-review-loop`) are **backward-looking**. `ship-it` is the forward-looking
 **driver** that chains research → PR → reviewed-done — the one thing none of the others do end to end.
