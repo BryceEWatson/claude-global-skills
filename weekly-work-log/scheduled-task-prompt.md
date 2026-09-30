@@ -48,10 +48,15 @@ Follow `~/.claude/skills/weekly-work-log/SKILL.md` rules exactly. Do these steps
     firing). The guard recorded success `PR_ALREADY_OPEN` or `MERGED`, or carried forward the
     first firing's `HELD` or `PR_OPENED` verdict on that PR. Report it and STOP: never
     draft or publish the same week twice.
-  - exit 11 (`STALE`): a weekly or backfill PR opened before this run's week ended is still
-    open, or a backfill PR is open, so a week is going uncurated. The guard recorded failure
-    `STALE_WEEKLY_PR` with the PR's link. Report it and STOP. Do not merge, close, or rebase that
-    PR: it was held for a reason Bryce has to see.
+  - exit 12 (`ROLL`): exactly one leftover weekly or backfill PR is open. Keep the guard's
+    JSON: `pr.number`, `pr.url`, `pr.headRefName` and `holdLabels`. This run builds this week
+    on top of that PR's branch and replaces it (Bryce, 2026-09-30: a stuck PR must not stop the
+    weekly log). Prepare WORKTREE from that branch as the roll-forward steps below say, and
+    carry its hold labels in step 6. Never merge the leftover PR itself.
+  - exit 11 (`STALE`): more than one leftover PR is open, or a leftover is still open beside
+    this week's own PR, so the run cannot tell which to build on. The guard recorded failure
+    `STALE_WEEKLY_PR` with the PR's link. Report it and STOP. Do not merge, close, or rebase
+    those PRs: Bryce has to see them.
   - exit 2 (`ERROR`): the guard could not list PRs (it recorded `PR_LIST_FAILED`) or could not
     record its verdict (its output has `recordError`). In the second case persist
     `GUARD_RECORD_FAILED` yourself if you can. STOP.
@@ -66,8 +71,17 @@ Follow `~/.claude/skills/weekly-work-log/SKILL.md` rules exactly. Do these steps
   4. Run `git -C BASE worktree prune`, then
      `git -C BASE worktree add --detach WORKTREE origin/main`.
   5. If the add fails, prune and retry the add exactly ONCE. Then stop on failure.
-- `cd` to WORKTREE. Confirm it is clean and `HEAD` equals `origin/main`. All remaining
-  commands in this task run in WORKTREE.
+- **Roll-forward (only on guard exit 12).** After step 4 above, in WORKTREE:
+  1. `git fetch origin <pr.headRefName>`, then `git checkout --detach FETCH_HEAD`.
+  2. `git merge --no-edit origin/main`. If it conflicts, run `git merge --abort`, persist
+     `node "{{SKILL_HOME}}/run-state.cjs" fail --reason-code ROLLFORWARD_CONFLICT --message "PR <n> no longer merges cleanly with main, so this week was not drafted on top of it" --pr-url "<pr.url>" --pr-number "<n>"`,
+     report it and STOP. Never resolve a conflict in report data by hand.
+  3. Every later step runs on this checkout. The leftover PR's drafted items are already in
+     `work-log.source.json`, so the idempotency rule in step 2 skips them and only this week's
+     sessions are curated.
+- `cd` to WORKTREE. Confirm it is clean and `HEAD` equals `origin/main` (on a roll-forward:
+  `git merge-base --is-ancestor origin/main HEAD` succeeds instead). All remaining commands in
+  this task run in WORKTREE.
 
 ## 1. Discover (deterministic, redacted, no LLM)
 - `node scripts/draft-work-log-from-handoffs.mjs` — handoff claims/reversals/open-threads
@@ -83,7 +97,13 @@ Follow `~/.claude/skills/weekly-work-log/SKILL.md` rules exactly. Do these steps
 - The two digests are SEPARATE files. Both are already scrubbed; read ONLY these digests,
   never raw transcripts. Distil from BOTH: the handoff digest carries the tagged claims,
   reversals, and decisions; the session digest carries the per-session steers + reasoning.
-- **Findings miner** (this replaced the Thursday `weekly-publishable-findings` task):
+- **Findings miner: PAUSED (Bryce, 2026-09-30).** Do not run it. Its top pick has been a
+  false positive on every run checked (Bryce's own throwaway scripts failing, not someone
+  else's software), so each run only added ledger noise. Record
+  `miner: { ran: false, exitCode: null, note: "paused 2026-09-30 until the ranker discounts own-toolchain failures" }`
+  in step 4 and take the post card from this week's work only. Leave `honestweek.config.json`
+  and `honestweek.findings.json` untouched. The steps below are kept for when Bryce resumes it;
+  skip them while this pause stands.
   1. Confirm `node C:\Users\Bryce\Projects\honestweek\bin\honestweek.mjs mine --help` works.
      If not, note `miner: did not run, <why>` for step 4 and continue.
   2. `honestweek.config.json` in WORKTREE must have a top-level `mine` key. If it has none,
@@ -302,6 +322,18 @@ holds the merge.)
   WITHOUT `--advisory`" applies ONLY to a non-data `work-log-weekly.mjs` failure (e.g. a
   transient `gh`/network error), and a PR opened that way will hold (no advisory). Retry
   exactly ONCE. If the retry fails, persist `PR_OPEN_FAILED` before stopping.
+- **Roll-forward only**, right after the new PR opens and before step 7:
+  1. If the guard returned any `holdLabels`, put each on the new PR
+     (`gh pr edit <new> --repo BryceEWatson/brycewatson.com --add-label <label>`). The merge
+     gate then holds the new PR exactly as it held the old one. If a label cannot be added,
+     add `hold` instead; if that fails too, do not run step 7, record HELD with that reason.
+  2. Comment on the new PR: "This carries PR <old>, which had been open since <date>, plus the
+     week of <weekStart> to <weekEnd>. Merging publishes all of it." Then comment on the old
+     PR "Replaced by PR <new>, which carries every week this one held." and close it
+     (`gh pr close <old> --repo BryceEWatson/brycewatson.com`). Post the comment as its own
+     call, never through `gh pr close --comment`. Confirm the old PR reads CLOSED.
+  3. If the script reported no change, open nothing new and leave the old PR as it is: record
+     success `NO_CHANGE` with the message "nothing new this week; PR <old> still open".
 - If the script reports no change at all (no report data, candidates, ledger, or verdict log
   changed), record success `NO_CHANGE` and skip to step 8. A PR that carries only candidates or
   ledger changes is normal and goes through step 7 like any other.

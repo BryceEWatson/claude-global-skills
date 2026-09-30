@@ -11,6 +11,15 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Changed
 
+- **`weekly-work-log`: one stuck PR no longer stops the weekly log, and the miner is paused.**
+  When exactly one weekly or backfill PR from an earlier week is still open, `weekly-pr-guard.cjs`
+  now returns `ROLL` (exit 12) instead of failing. The Sunday run builds the new week on top of
+  that PR's branch, opens one PR carrying both, copies any hold label across so the merge gate
+  still holds it, and closes the old PR. More than one leftover, or a leftover beside this week's
+  own PR, still fails as `STALE_WEEKLY_PR`, and a roll-forward that conflicts with main fails as
+  `ROLLFORWARD_CONFLICT`. PR 137 alone had stopped two Sundays. The findings miner is paused
+  (Bryce, 2026-09-30): every top pick checked had been a false positive.
+
 - **`session-end`: a light close, a one-call evidence probe, and one question about durable knowledge.**
   A session whose work already sits in pull requests can now close in chat with no handoff file.
   Step 1's evidence comes from one read-only script, `probe.sh`, which works with GNU date, BSD date

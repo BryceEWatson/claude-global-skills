@@ -50,7 +50,11 @@ Every Monday, whatever the Sunday result, check that the live site works:
   7. **`outcome: NO_CHANGE`:** nothing changed; report it in one line and stop.
 
 ## 2. Cases 1 to 3: raise the failure
-- If the record has a `prNumber` (for example `STALE_WEEKLY_PR`), ask on that PR:
+- If the reason code is `ROLLFORWARD_CONFLICT`, ask on that PR: "Weekly work log stopped:
+  PR <n> no longer merges cleanly with main, so last week couldn't be built on top of it. Say
+  merge <n> or close <n>."
+- Otherwise, if the record has a `prNumber` (for example `STALE_WEEKLY_PR`, which since
+  2026-09-30 means more than one leftover PR is open), ask on that PR:
   "Weekly work log stopped: PR <n> has been open since <date>, so last week wasn't drafted.
   Say merge <n> or close <n>."
 - Otherwise look for an open issue titled `Weekly work log did not run` on

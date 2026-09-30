@@ -11,17 +11,24 @@
  *
  * The rule. Each run reports the week that ends on the most recent Sunday (Pacific; today, if
  * today is Sunday). An open weekly or backfill PR opened before that Sunday is left over from an
- * earlier week: that is STALE, a failure Monday raises. This covers every PR seven or more days
- * old, and also a PR opened mid-week by a Sunday run that started late, which a plain seven-day
- * limit would let through for another week. Any open backfill PR is also STALE: it blocks the
- * weekly run and is not the run's own PR. A weekly PR opened on or after that Sunday, still open
- * or already merged, means this week already ran (a second firing), so the run stops quietly
- * instead of drafting and publishing the week a second time.
+ * earlier week. This covers every PR seven or more days old, and also a PR opened mid-week by a
+ * Sunday run that started late, which a plain seven-day limit would let through for another
+ * week. Any open backfill PR is also left over: it is not the run's own PR. A weekly PR opened on
+ * or after that Sunday, still open or already merged, means this week already ran (a second
+ * firing), so the run stops quietly instead of drafting and publishing the week a second time.
+ *
+ * One leftover PR is ROLL (since 2026-09-30): the run builds this week on top of that PR's branch
+ * and opens one PR that carries both, then closes the leftover. From 17 to 30 September a
+ * leftover stopped the run as a failure, and PR 137 alone stopped two Sundays. Any hold label the
+ * leftover carries is returned in holdLabels so the run puts it on the new PR: rolling forward
+ * keeps weeks drafted, it never publishes something that was being held. More than one leftover,
+ * or a leftover beside this week's own PR, is still STALE: the run cannot tell which to build on.
  *
  * Verdicts (exit code):
  *   CLEAR  (0)  nothing blocks the run; it continues
  *   FRESH  (10) this week's weekly PR already exists (open or merged); the run stops quietly
- *   STALE  (11) an open PR from an earlier week, or an open backfill PR; the run stops as a failure
+ *   STALE  (11) several leftover PRs, or a leftover beside this week's PR; the run stops as a failure
+ *   ROLL   (12) exactly one leftover PR; the run continues on top of its branch
  *   ERROR  (2)  could not read the PRs, or could not record the result
  *
  * Usage:
@@ -29,7 +36,8 @@
  *
  * --record writes the terminal run state through run-state.cjs (FRESH -> success
  * PR_ALREADY_OPEN, or MERGED when it already merged; STALE -> fail STALE_WEEKLY_PR;
- * ERROR -> fail PR_LIST_FAILED).
+ * ERROR -> fail PR_LIST_FAILED). CLEAR and ROLL record nothing: the run goes on and records its
+ * own outcome.
  * --prs-json and --state-dir exist for tests; without --prs-json it calls gh.
  */
 
@@ -44,6 +52,8 @@ const WORK_LOG_DATA = /^(src\/data\/(work-log\.source\.json|work-log\.json|goals
 const DEFAULT_STATE_DIR = path.join(os.homedir(), '.claude', 'scheduled-tasks', 'weekly-work-log');
 const TIME_ZONE = 'America/Los_Angeles';
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// The merge gate's hold labels (brycewatson.com scripts/work-log-merge-gate.mjs HOLD_LABELS).
+const HOLD_LABELS = ['hold', 'decision', 'needs-bryce', 'do-not-merge'];
 
 function option(name) {
   const index = process.argv.indexOf(`--${name}`);
@@ -95,10 +105,11 @@ function isWeeklyPr(pr) {
 }
 
 // `prs` holds every open PR plus recently merged ones (state OPEN or MERGED; a PR without a
-// state counts as open). Order of precedence:
-//   1. any open weekly or backfill PR opened before this run's week ended -> STALE
-//   2. any open backfill PR -> STALE (it blocks the weekly run and is not this run's own PR)
-//   3. a weekly PR opened for this week, open or already merged -> FRESH (a second firing; quiet)
+// state counts as open). A leftover is an open weekly or backfill PR opened before this run's
+// week ended, or any open backfill PR. Order of precedence:
+//   1. more than one leftover, or a leftover beside this week's own PR -> STALE
+//   2. a weekly PR opened for this week, open or already merged -> FRESH (a second firing; quiet)
+//   3. exactly one leftover -> ROLL (build this week on top of it)
 //   4. otherwise CLEAR
 function evaluate(prs, { now = new Date().toISOString() } = {}) {
   const weekEnd = reportWeekEnd(now);
@@ -107,35 +118,38 @@ function evaluate(prs, { now = new Date().toISOString() } = {}) {
       number: pr.number, url: pr.url, headRefName: pr.headRefName, createdAt: pr.createdAt,
       state: String(pr.state || 'OPEN').toUpperCase(),
       openedOn: pacificDate(pr.createdAt), ageDays: calendarDaysBetween(pr.createdAt, now),
+      labels: (pr.labels || []).map((l) => String(l?.name || l).toLowerCase()),
     }))
     .sort((a, b) => a.openedOn.localeCompare(b.openedOn));
   const open = weekly.filter((pr) => pr.state === 'OPEN');
-  const oldOpen = open.find((pr) => pr.openedOn < weekEnd);
-  if (oldOpen) {
-    return {
-      verdict: 'STALE', weekEnd, pr: oldOpen, prs: weekly,
-      message: `Weekly work-log PR ${oldOpen.number} has been open since ${oldOpen.openedOn} (${oldOpen.ageDays} days), before this run's week ended on ${weekEnd}, so this week was not drafted. Land or close it.`,
-    };
-  }
-  const openBackfill = open.find((pr) => pr.headRefName.startsWith('work-log/backfill-'));
-  if (openBackfill) {
-    return {
-      verdict: 'STALE', weekEnd, pr: openBackfill, prs: weekly,
-      message: `Backfill PR ${openBackfill.number} is open, so this week was not drafted on top of it. Land or close it, then rerun.`,
-    };
-  }
+  const leftovers = open.filter((pr) => pr.openedOn < weekEnd || pr.headRefName.startsWith('work-log/backfill-'));
   const thisWeek = weekly.find((pr) => pr.headRefName.startsWith('work-log/weekly-') && pr.openedOn >= weekEnd && ['OPEN', 'MERGED'].includes(pr.state));
+  if (leftovers.length > 1 || (leftovers.length === 1 && thisWeek)) {
+    const pr = leftovers[0];
+    const why = thisWeek
+      ? `PR ${pr.number} (open since ${pr.openedOn}, ${pr.ageDays} days) is still open beside this week's PR ${thisWeek.number}, so the roll-forward did not close it`
+      : `${leftovers.length} weekly or backfill PRs are open from before ${weekEnd} (${leftovers.map((p) => p.number).join(', ')}), so the run cannot tell which one to build on`;
+    return { verdict: 'STALE', weekEnd, pr, prs: weekly, message: `${why}. Land or close the extra PRs.` };
+  }
   if (thisWeek) {
     return {
       verdict: 'FRESH', weekEnd, pr: thisWeek, prs: weekly,
       message: `Weekly work-log PR ${thisWeek.number} was already ${thisWeek.state === 'MERGED' ? 'merged' : 'opened'} for this week; not running again.`,
     };
   }
+  if (leftovers.length === 1) {
+    const pr = leftovers[0];
+    const holdLabels = pr.labels.filter((l) => HOLD_LABELS.includes(l));
+    return {
+      verdict: 'ROLL', weekEnd, pr, prs: weekly, holdLabels,
+      message: `PR ${pr.number} has been open since ${pr.openedOn} (${pr.ageDays} days); this week is built on top of its branch ${pr.headRefName} and the new PR replaces it${holdLabels.length ? `, keeping its ${holdLabels.join(', ')} label` : ''}.`,
+    };
+  }
   return { verdict: 'CLEAR', weekEnd, prs: weekly };
 }
 
 function listPrs() {
-  const fields = 'number,url,headRefName,createdAt,state,files';
+  const fields = 'number,url,headRefName,createdAt,state,files,labels';
   const open = JSON.parse(execFileSync('gh', ['pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '200', '--json', fields], { encoding: 'utf8' }));
   const merged = JSON.parse(execFileSync('gh', ['pr', 'list', '--repo', REPO, '--state', 'merged', '--limit', '30', '--json', fields], { encoding: 'utf8' }));
   return [...open, ...merged];
@@ -194,7 +208,7 @@ function main() {
     }
   }
   console.log(JSON.stringify(result, null, 2));
-  process.exit({ CLEAR: 0, FRESH: 10, STALE: 11, ERROR: 2 }[result.verdict]);
+  process.exit({ CLEAR: 0, FRESH: 10, STALE: 11, ROLL: 12, ERROR: 2 }[result.verdict]);
 }
 
 module.exports = { evaluate, calendarDaysBetween, pacificDate, reportWeekEnd, isWeeklyPr };
