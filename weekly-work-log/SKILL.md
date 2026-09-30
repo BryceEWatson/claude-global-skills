@@ -51,8 +51,13 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
   `MERGED`), so a second firing never publishes the week twice; if the first firing left a
   `HELD` or `PR_OPENED` verdict on that same PR, the guard keeps it so Monday still asks. An open PR opened before that
   Sunday (anything seven or more days old, or a PR a late-starting run opened mid-week), or any
-  open backfill PR: failure `STALE_WEEKLY_PR` with the PR's link, which Monday raises to Bryce. Before
-  2026-09-17 an open PR was always a success, which is how PR 112 blocked four weeks unseen.
+  open backfill PR, is a leftover. Exactly one leftover: `ROLL`, and the run builds this week on
+  top of that PR's branch, opens one PR carrying both, copies over any hold label so the gate
+  still holds it, and closes the leftover. More than one leftover, or a leftover beside this
+  week's own PR: failure `STALE_WEEKLY_PR` with the PR's link, which Monday raises to Bryce.
+  Before 2026-09-17 an open PR was always a success, which is how PR 112 blocked four weeks
+  unseen; from 2026-09-17 to 2026-09-30 any leftover stopped the run, which is how PR 137
+  stopped two Sundays.
 
 ## Modes
 
@@ -67,7 +72,7 @@ Everything runs LOCALLY (it reads `~/.claude` handoffs + the sibling repos under
   - **Deterministic backstop:** `work-log-via-honestweek.mjs` (honestweek) git-verifies + number-fences every number (aborts on any unresolved/non-Bryce commit, so NO PR on bad data). Items the job drafts carry `"drafted": "auto-<date>"`.
   - **Fail-open advisory:** judgment that ASSISTS the reviewer (badge-vs-prose, coverage gaps, badge-vs-git, a downgrade-only privacy adjudicator, reversal-coverage) spliced into the PR body, plus the noun-harvester (count only). Any LLM/network/`gh` failure → a single "advisory unavailable" line; never blocks the PR. Advisory may only DOWNGRADE/FLAG.
   - **Candidates:** a LinkedIn candidate for the twelve-week test and a one-screen post card (from the week's work or the findings miner), or an explicit skip with the reason for each, in `data/weekly-candidates/<weekStart>.json`. Each candidate carries a receipt, Bryce's voice, a named reader and what they can do after, and honest status, or it is a skip. The run first collects last week's labeled replies from the merged PR.
-  - **Findings miner:** the run executes `honestweek mine` (formerly the Thursday `weekly-publishable-findings` task, now disabled) and commits its ledger in the weekly PR, so declined findings stop coming back.
+  - **Findings miner:** PAUSED since 2026-09-30 (Bryce's go): every top pick checked had been a false positive, so the run skips `honestweek mine` and records `miner: { ran: false }`. When resumed, the run executes it (formerly the Thursday `weekly-publishable-findings` task, now disabled) and commits its ledger in the weekly PR, so declined findings stop coming back.
   - **Gated self-merge:** the run opens exactly one PR and never pushes `main`. It then waits for CI and runs the merge gate, which merges only under Bryce's 2026-09-10 `auto` ruling ("auto-merge when every deterministic gate passes and the advisory raises no flag", weekly log only). A hold waits for Bryce, and Monday raises it.
 - **`--week YYYY-MM-DD`**: backfill a past completed week's archive (see above). Manual only.
 - **`--days N`**: override the window to a rolling N-day scan (manual broader discovery).
@@ -113,8 +118,9 @@ The unattended weekly run is a **Claude scheduled task** (`mcp__scheduled-tasks`
 - **Failure visibility:** every run starts by writing `last-run.json` under the live
   scheduled-task directory and must write one terminal state. Fetch/worktree setup and a
   non-data PR-open failure retry exactly once; data verification never retries into a PR.
-  An open weekly PR left over from an earlier week is a failure (`STALE_WEEKLY_PR`), not a
-  success.
+  One open weekly PR left over from an earlier week is rolled forward into this week's PR;
+  several are a failure (`STALE_WEEKLY_PR`), and a roll-forward that conflicts with main is a
+  failure (`ROLLFORWARD_CONFLICT`), never a success.
 - **The Monday preview** (`weekly-work-log-preview`, prompt in
   `preview-scheduled-task-prompt.md`) reads that state. A failure, a stale PR, a missed run,
   or a held merge is raised to Bryce through the `ask` skill. A merged week becomes a

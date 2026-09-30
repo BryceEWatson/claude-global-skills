@@ -66,31 +66,50 @@ test('a Monday catch-up run still treats the PR its own Sunday run opened as FRE
   assert.equal(evaluate([weeklyPr(141, '2026-09-21T06:00:00Z')], { now: '2026-09-21T23:00:00Z' }).verdict, 'FRESH');
 });
 
-test('failure path: PR 112 on the Sunday of 13 September is STALE and persists a failure with the PR', () => {
+test('PR 112 on the Sunday of 13 September is ROLL: the run builds on its branch and records nothing yet', () => {
   // PR 112 was created 2026-08-17T05:17:38Z (16 August, Pacific). The run of 13 September
-  // started 2026-09-14T05:00:48Z (13 September, Pacific).
+  // started 2026-09-14T05:00:48Z (13 September, Pacific). Before 2026-09-30 this stopped the run.
   const r = runGuard([weeklyPr(112, '2026-08-17T05:17:38Z', 'work-log/weekly-2026-08-16')], '2026-09-14T05:00:48Z');
+  assert.equal(r.code, 12);
+  assert.equal(r.out.verdict, 'ROLL');
+  assert.equal(r.out.pr.number, 112);
+  assert.equal(r.out.pr.headRefName, 'work-log/weekly-2026-08-16');
+  assert.deepEqual(r.out.holdLabels, []);
+  assert.match(r.out.message, /open since 2026-08-16 \(28 days\)/);
+  assert.equal(r.state, null);
+});
+
+test("a leftover PR's hold labels come back so the new PR keeps them, and other labels do not", () => {
+  const pr = { ...weeklyPr(137, '2026-09-17T20:00:00Z', 'work-log/backfill-2026-08-10'), labels: [{ name: 'needs-bryce' }, { name: 'Hold' }, { name: 'documentation' }] };
+  const result = evaluate([pr], { now: SUNDAY_RUN });
+  assert.equal(result.verdict, 'ROLL');
+  assert.deepEqual(result.holdLabels, ['needs-bryce', 'hold']);
+  assert.match(result.message, /keeping its needs-bryce, hold label/);
+});
+
+test('failure path: two leftover PRs are STALE and persist a failure naming both', () => {
+  const r = runGuard([
+    weeklyPr(112, '2026-08-17T05:17:38Z', 'work-log/weekly-2026-08-16'),
+    weeklyPr(137, '2026-09-17T20:00:00Z', 'work-log/backfill-2026-08-10'),
+  ], SUNDAY_RUN);
   assert.equal(r.code, 11);
   assert.equal(r.out.verdict, 'STALE');
   assert.equal(r.state.status, 'failed');
   assert.equal(r.state.reasonCode, 'STALE_WEEKLY_PR');
   assert.equal(r.state.prNumber, '112');
-  assert.match(r.state.prUrl, /\/pull\/112$/);
-  assert.match(r.state.message, /open since 2026-08-16 \(28 days\)/);
+  assert.match(r.state.message, /2 weekly or backfill PRs are open from before 2026-09-20 \(112, 137\)/);
 });
 
-test("a PR opened minutes after last Sunday's run is stale at this Sunday's run", () => {
+test("a PR opened minutes after last Sunday's run is a leftover at this Sunday's run", () => {
   const opened = '2026-09-14T05:10:00Z'; // Sunday 13 Sep, 22:10 Pacific
   assert.equal(calendarDaysBetween(opened, SUNDAY_RUN), 7);
-  assert.equal(evaluate([weeklyPr(142, opened)], { now: SUNDAY_RUN }).verdict, 'STALE');
+  assert.equal(evaluate([weeklyPr(142, opened)], { now: SUNDAY_RUN }).verdict, 'ROLL');
 });
 
-test('a PR opened mid-week by a late run is stale at the next Sunday, though under seven days old', () => {
+test('a PR opened mid-week by a late run is a leftover at the next Sunday, though under seven days old', () => {
   const opened = '2026-09-14T15:00:00Z'; // Monday 14 Sep, 08:00 Pacific: last week's run, started late
   assert.equal(calendarDaysBetween(opened, SUNDAY_RUN), 6);
-  const r = runGuard([weeklyPr(143, opened)], SUNDAY_RUN);
-  assert.equal(r.out.verdict, 'STALE');
-  assert.equal(r.state.reasonCode, 'STALE_WEEKLY_PR');
+  assert.equal(evaluate([weeklyPr(143, opened)], { now: SUNDAY_RUN }).verdict, 'ROLL');
 });
 
 test('a second firing after the first one already merged stops quietly and records MERGED', () => {
@@ -109,26 +128,27 @@ test('an earlier week that merged, or a closed PR, does not stop this week', () 
   assert.equal(evaluate([lastWeek, closed], { now: SUNDAY_RUN }).verdict, 'CLEAR');
 });
 
-test('an open backfill PR opened today still blocks, as a failure rather than a quiet stop', () => {
+test('an open backfill PR opened today is a leftover too, and rolls forward', () => {
   const backfill = weeklyPr(147, '2026-09-20T20:00:00Z', 'work-log/backfill-2026-09-07');
   const r = runGuard([backfill], SUNDAY_RUN);
-  assert.equal(r.code, 11);
-  assert.equal(r.state.reasonCode, 'STALE_WEEKLY_PR');
-  assert.match(r.state.message, /Backfill PR 147 is open/);
+  assert.equal(r.code, 12);
+  assert.equal(r.out.verdict, 'ROLL');
+  assert.equal(r.out.pr.number, 147);
 });
 
-test('the oldest of several weekly PRs decides, and backfill branches count', () => {
+test("a leftover still open beside this week's PR is STALE (the roll-forward did not close it)", () => {
   const result = evaluate([
     weeklyPr(150, '2026-09-21T05:05:00Z'),
     weeklyPr(149, '2026-09-01T17:00:00Z', 'work-log/backfill-2026-08-17'),
   ], { now: SUNDAY_RUN });
   assert.equal(result.verdict, 'STALE');
   assert.equal(result.pr.number, 149);
+  assert.match(result.message, /still open beside this week's PR 150/);
 });
 
 test('a backfill PR that only changes the report archive and goals still counts', () => {
   const pr = weeklyPr(151, '2026-09-01T17:00:00Z', 'work-log/backfill-2026-08-10', [{ path: 'src/data/reports/2026-08-10.json' }, { path: 'src/data/goals.json' }]);
-  assert.equal(evaluate([pr], { now: SUNDAY_RUN }).verdict, 'STALE');
+  assert.equal(evaluate([pr], { now: SUNDAY_RUN }).verdict, 'ROLL');
 });
 
 test('a backfill branch that touches no work-log data is not a weekly PR, but a weekly branch always is', () => {
@@ -182,7 +202,7 @@ test('a verdict that cannot be recorded exits 2 and says why', () => {
   const blocker = path.join(os.tmpdir(), `weekly-pr-guard-file-${process.pid}`);
   fs.writeFileSync(blocker, 'not a directory');
   try {
-    const r = runGuard([weeklyPr(112, '2026-08-17T05:17:38Z')], SUNDAY_RUN, { stateDir: path.join(blocker, 'state') });
+    const r = runGuard([weeklyPr(112, '2026-08-17T05:17:38Z'), weeklyPr(137, '2026-09-17T20:00:00Z')], SUNDAY_RUN, { stateDir: path.join(blocker, 'state') });
     assert.equal(r.code, 2);
     assert.equal(r.out.verdict, 'STALE');
     assert.match(r.out.recordError, /run-state\.cjs failed/);
@@ -192,7 +212,7 @@ test('a verdict that cannot be recorded exits 2 and says why', () => {
 });
 
 test('without --record the guard reports but writes no state', () => {
-  const r = runGuard([weeklyPr(112, '2026-08-17T05:17:38Z')], '2026-09-14T05:00:48Z', { record: false });
+  const r = runGuard([weeklyPr(112, '2026-08-17T05:17:38Z'), weeklyPr(137, '2026-09-10T20:00:00Z')], '2026-09-14T05:00:48Z', { record: false });
   assert.equal(r.code, 11);
   assert.equal(r.state, null);
 });
