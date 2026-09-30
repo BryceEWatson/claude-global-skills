@@ -1,6 +1,6 @@
 ---
 name: session-end
-description: End or close out the current Claude Code session, producing an evidence-grounded record of what happened: decisions and rationale, claims and their verification status, load-bearing assumptions, artifacts changed, reversals. When work is mid-flight it also hands off, emitting a ready-to-paste continuation prompt for a fresh session. Formerly "session-handoff"; handoff is now its mid-flight mode.
+description: End or close out the current Claude Code session, producing an evidence-grounded record of what happened: decisions and rationale, claims and their verification status, load-bearing assumptions, artifacts changed, reversals. When work is mid-flight it also hands off, emitting a ready-to-paste continuation prompt for a fresh session. When everything already sits in pull requests it closes light, with no handoff file. Formerly "session-handoff"; handoff is now its mid-flight mode.
 allowed-tools: Bash, Read, Grep, Glob, Write, TodoWrite
 ---
 
@@ -11,6 +11,28 @@ so a fresh session can pick up with zero loss. Two intents, one flow: *ending* a
 record; *handing off* (the mid-flight mode) adds the exact resumable state + a copy-pasteable
 continuation prompt **for the next session (you, with an empty context window) and for the human operator**.
 Optimize for *truth and resumability*, not for sounding complete.
+
+## Step 0 — Decide how much close-out this session needs
+
+A full run can take a dozen or so turns [estimate], and each one re-reads a whole end-of-session context, so spend it
+where the record gets used. Handoffs are read by the next session that continues the work, by a
+project's status and wiki passes, and by the weekly work log. None of those need a handoff for work
+that already lives in a pull request: git and the PR body carry it.
+
+- **Full record (Steps 1 to 5)** when either holds: work is **mid-flight**, or the session produced
+  decisions, diagnoses, reversals or findings that are **not already written** in a PR body, an issue, a
+  board row or a committed doc. Design, research, debugging and review sessions usually qualify.
+- **Light close** when everything of substance already sits in PRs, issues or board rows and nothing is
+  in flight. Run the Step 1 probe once, honour the close-out contract if the project declares one
+  (Step 4b; releasing a claim is never optional), ask the Step 4c question, and close in chat with the
+  PR and issue links plus the stop marker. Write no handoff file. Say "light close" and the reason in the closing message, so
+  the choice is visible and the operator can ask for the full record.
+- Unsure which applies: run the full record. A missing record is the more expensive mistake.
+
+**Turn budget.** Evidence in one call (the Step 1 probe), the handoff in one write, then the contract and the Step 4c
+question, then at most one amendment covering both (a contract that changed state, a wiki PR that
+landed or failed), then the closing message. Do not run the probes one at a time, and do not re-read files that are
+already in context.
 
 ## Operating principle: ground in artifacts, never in memory alone
 
@@ -58,6 +80,20 @@ This applies to *every* section below, and hardest to Steps 3 and 5, where claim
 the evidence that produced them.
 
 ## Step 1 — Gather evidence (do this before writing anything)
+
+**Run the probe, once:**
+
+```bash
+sh "{{SKILL_HOME}}/probe.sh" "<session start, e.g. 2026-09-16 09:00>"
+```
+
+That one call returns every git and GitHub check listed below: the primary checkout, branch, status,
+diff stat, the window's commits on this branch and on the default branch with the files they touched,
+this author's merged and recently updated open pull requests, the handoff path to write (timestamp and
+random token already generated), the origin stamp line, whether the handoffs folder is ignored, and the
+project's close-out contract if it declares one. It is read-only and does not fetch. If the script is
+missing, run the same checks as ONE compound command. The bullets below stay because they say what
+each check is for and how to read its output; they are not a list of separate calls.
 
 - `git status --short` and `git diff --stat` (+ `git log --oneline -15`) — what actually changed / was created. Every artifact you cite must appear here or on disk.
 - **Always look for work that already landed — never gate this on the working tree being clean.** Those
@@ -126,7 +162,9 @@ next session from "fixing" a safety property.
 
 Write the full summary to a file so the next session can READ it rather than trust pasted prose:
 `<primary-checkout>/.claude/handoffs/<YYYYMMDDTHHMMSSZ>_<slug>_<discriminator>.md` (create the dir; it's
-additive/safe). If not in a writable repo, skip and emit in-chat only.
+additive/safe). If not in a writable repo, skip and emit in-chat only. The Step 1 probe prints this path with
+the timestamp and token filled in, plus the origin stamp line; use them as printed and supply only the
+slug. A second write in the same session gets a new token (rerun the probe or generate one).
 
 **Every filename carries a unique discriminator from the start — not only when a clash is noticed.**
 That directory is shared by every worktree (see below), so two concurrent sessions can land on one path,
@@ -194,14 +232,14 @@ step keys on.
 `<!-- session-end:origin branch=<current branch> worktree=<basename of the worktree root> -->`. Writing to
 the primary checkout is what makes the handoff durable, but it also means sessions running in *different*
 worktrees now share one handoff directory. "The newest file" therefore stops being a safe way for a later
-`session-pickup` to tell whose handoff it is holding: end two concurrent sessions minutes apart and the
-newest belongs to whichever finished last, not to the branch being resumed. This line is what lets pickup
-disambiguate.
+session to tell whose handoff it is holding: end two concurrent sessions minutes apart and the
+newest belongs to whichever finished last, not to the branch being resumed. This line is what lets the resuming
+session disambiguate.
 
 **`worktree=` is the directory's BASENAME, never an absolute path.** A handoff is durable and in many
 projects committed, so anything stamped here can end up in shared or public history — and an absolute
 path carries the operator's home directory, username, and often a client or project name. `branch` is
-what pickup actually matches on; the basename is only a tiebreak for the rare two-worktrees-one-branch
+what a resuming session matches on; the basename is only a tiebreak for the rare two-worktrees-one-branch
 case, and it buys that without persisting a home path. If even the basename is sensitive, drop the field
 and keep `branch`.
 
@@ -238,6 +276,25 @@ exists to prevent, produced by the skill itself: a record that reads as current 
 that no longer exists. Whatever the contract changed is an artifact of this session, so amend the
 handoff to list it and to reflect the released state. Update on the success path, not only on failure.
 
+## Step 4c — Did this session learn something durable? (one question, both modes)
+
+Ask it once, of the session itself, never of the operator: **did this session learn something another
+session would otherwise have to rediscover?** That means knowledge, not state: how a repository deploys or
+breaks, a convention or trap, a decision and the reason for it, a pattern with evidence, or what a source
+(a study, a report, a book) establishes. What is in flight, a status or a count is not it; that belongs in
+the project's own goals or NEXT-ACTIONS. A rule about how Claude should behave is not it either; that is
+auto-memory.
+
+- **No:** say nothing and take no step. Expect most sessions to answer no.
+- **Yes:** run the global `wiki` skill's `learn` procedure for it before closing: a draft, the pages, a
+  claims manifest, then `node "$HOME/.claude/skills/wiki/lane.mjs" land`. Put the pull request it prints in
+  the closing message, and when a handoff is written, list it under Artifacts as `wiki: <pull request>`;
+  the lane's own output is its evidence (see the gate below). If the lane refuses the write
+  and the fix is not quick, name what was learned and why it did not land under **Open threads** instead,
+  so the knowledge survives the session. On a light close there is no handoff to hold it, so write the
+  full record instead: knowledge left only in chat is lost with the session.
+- **No `wiki` skill installed** (a machine without Command's kit): skip, and say so in one line.
+
 ## Step 5 — Emit the continuation prompt (ONLY if work is mid-flight)
 
 **If the session is DONE** — nothing in flight (work shipped, parked, or merged) — skip this step.
@@ -256,16 +313,39 @@ session. It MUST:
    pasted prompt has no `git log` behind it. Stripping `[derived]` to make the prompt read cleanly is
    exactly how an inference becomes the next session's premise. Carry the tag, or the inline evidence.
 
+7. **End with the reconcile block, verbatim**, filling in only the handoff's absolute path. A handoff is
+   a snapshot: commits land, branches move, and another session may have advanced or abandoned the
+   work. The rules that catch that travel in the prompt, because a continued session starts from the
+   pasted prompt and nothing else. (They used to live in a separate `session-pickup` skill, retired
+   2026-09-16 after a search of the operator's session logs counted 7 invocations of it against 25
+   continued sessions that opened with the pasted prompt instead [measured then, not re-checked here].)
+
+   ```text
+   Before acting, reconcile this prompt with current reality. The handoff was a snapshot.
+   1. Read the handoff at <absolute path>. Its second line names the branch it was written on. If that
+      is not the branch you are resuming, stop and ask me which handoff to use.
+   2. Run git status --short and git log --oneline -20, and check each file the handoff calls
+      in-progress: still there, changed since, or already landed?
+   3. Tell me which it is: unchanged, advanced (adjust the next step), or conflicts (stop and show me).
+   4. Treat every [derived], [assumed] and [unverified] claim as unchecked until you check it, above
+      all one that would justify repairing something. It may be deliberate.
+   5. Rebuild the todo list from the handoff, keep its settled decisions settled, honour any stop gate
+      it names, and confirm with me before a side-effecting step unless drift is unchanged and the
+      step is read-only.
+   ```
+
 Present it in a fenced block, ready to paste. Keep it tight but complete — it is the single thing that determines whether the next session continues cleanly.
 
 ## Safety + quality gate
 
 - **Read-only to the repo** except (a) writing the one handoff file and (b) whatever a declared close-out
-  contract authorizes (Step 4b). No commits. Absent such a contract, no edits to other files.
-- **The handoff went to the primary checkout**, not a worktree that is about to be deleted (Step 4), and
+  contract authorizes (Step 4b). No commits. Absent such a contract, no edits to other files. The Step 4c
+  wiki lane is outside this rule: it writes and commits only in the wiki repository, through its own PR.
+- **When a handoff is written, it went to the primary checkout**, not a worktree that is about to be deleted (Step 4), and
   its absolute path is stated in the closing message.
-- Every cited artifact exists in `git status`/on disk, **in the widened evidence** of Step 1, **or is a
-  change an executed close-out contract made** (Step 4b) — including a file it *deleted*. Releasing a
+- Every cited artifact exists in `git status`/on disk, **in the widened evidence** of Step 1, **is the
+  wiki pull request a Step 4c lane run printed** (that output is its evidence; it lives in another
+  repository), **or is a change an executed close-out contract made** (Step 4b) — including a file it *deleted*. Releasing a
   claim often means removing an untracked or ignored lock file, which then exists nowhere: not on disk,
   not in `git status` (deleting an ignored file leaves no status entry), not in any commit. The executed
   contract is the evidence for those, and without this carve-out the gate would force you to drop the
@@ -279,8 +359,8 @@ Present it in a fenced block, ready to paste. Keep it tight but complete — it 
 - If you're unsure whether something was decided vs. discussed, say so — don't assert it as settled.
 
 ## Complements (not duplicates)
-`session-pickup` is the inverse — it rehydrates the next session from the handoff doc this writes (invoke
-it at the start of a continued session; only relevant when this ran in mid-flight mode). `pattern-retrospective`
+The next session resumes from the continuation prompt this emits; its reconcile block (Step 5) carries
+what the retired `session-pickup` skill used to do. `pattern-retrospective`
 (rigorous multi-session studies) and `chat-history-search` (find past prompts) are heavier and
 backward-looking. `session-end` is the fast, forward-looking close-out for *this* session — recording it
 always, and handing it off when there's work to continue.
