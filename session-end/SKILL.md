@@ -287,7 +287,8 @@ auto-memory.
 - **No:** say nothing and take no step. Most sessions answer no.
 - **Yes:** run the global `wiki` skill's `learn` procedure for it before closing: a draft, the pages, a
   claims manifest, then `node "$HOME/.claude/skills/wiki/lane.mjs" land`. Put the pull request it prints in
-  the closing message (and in the handoff's Artifacts when one is written). If the lane refuses the write
+  the closing message, and when a handoff is written, list it under Artifacts as `wiki: <pull request>`;
+  the lane's own output is its evidence (see the gate below). If the lane refuses the write
   and the fix is not quick, name what was learned and why it did not land under **Open threads** instead,
   so the knowledge survives the session.
 - **No `wiki` skill installed** (a machine without Command's kit): skip, and say so in one line.
@@ -339,8 +340,9 @@ Present it in a fenced block, ready to paste. Keep it tight but complete — it 
   contract authorizes (Step 4b). No commits. Absent such a contract, no edits to other files.
 - **The handoff went to the primary checkout**, not a worktree that is about to be deleted (Step 4), and
   its absolute path is stated in the closing message.
-- Every cited artifact exists in `git status`/on disk, **in the widened evidence** of Step 1, **or is a
-  change an executed close-out contract made** (Step 4b) — including a file it *deleted*. Releasing a
+- Every cited artifact exists in `git status`/on disk, **in the widened evidence** of Step 1, **is the
+  wiki pull request a Step 4c lane run printed** (that output is its evidence; it lives in another
+  repository), **or is a change an executed close-out contract made** (Step 4b) — including a file it *deleted*. Releasing a
   claim often means removing an untracked or ignored lock file, which then exists nowhere: not on disk,
   not in `git status` (deleting an ignored file leaves no status entry), not in any commit. The executed
   contract is the evidence for those, and without this carve-out the gate would force you to drop the

@@ -1,12 +1,22 @@
 #!/usr/bin/env sh
 # session-end evidence probe: everything Step 1 of SKILL.md needs, in one call.
-# usage: sh probe.sh "<session start, any string `date -d` accepts>"   (default: 12 hours ago)
+# usage: sh probe.sh "<session start, e.g. 2026-09-16 09:00, or anything git's --since accepts>"   (default: 12 hours ago)
 # Read-only. Prints sections; never writes, commits, fetches, or changes a checkout.
 SINCE="${1:-12 hours ago}"
-SINCE_DAY=$(date -d "$SINCE" +%F 2>/dev/null) || SINCE_DAY=""
+# git reads SINCE itself, so the caller's window is never replaced. Only the pull-request search needs a calendar
+# day, found with whichever date tool this system has: GNU date, then BSD date (macOS), then a leading YYYY-MM-DD.
+day_of() {
+  date -d "$1" +%F 2>/dev/null && return 0
+  for f in '%Y-%m-%d %H:%M' '%Y-%m-%d %H:%M:%S' '%Y-%m-%dT%H:%M' '%Y-%m-%dT%H:%M:%S' '%Y-%m-%d'; do
+    date -j -f "$f" "$1" +%F 2>/dev/null && return 0
+  done
+  case "$1" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*) printf '%s\n' "$1" | cut -c1-10; return 0 ;; esac
+  return 1
+}
+SINCE_DAY=$(day_of "$SINCE")
 if [ -z "$SINCE_DAY" ]; then
-  echo "WARNING: could not parse session start '$SINCE'; using '12 hours ago'."
-  SINCE="12 hours ago"; SINCE_DAY=$(date -d "$SINCE" +%F 2>/dev/null || date +%F)
+  SINCE_DAY=$(date -d yesterday +%F 2>/dev/null || date -v-1d +%F 2>/dev/null || date +%F)
+  echo "WARNING: could not turn '$SINCE' into a calendar day; git still uses it as given, and the pull-request search starts at $SINCE_DAY."
 fi
 sec() { printf '\n== %s ==\n' "$1"; }
 
@@ -43,8 +53,8 @@ sec "last 15 commits on $BRANCH"
 git log --oneline -15
 sec "commits in the window on $BRANCH, with the files each touched"
 git log --since="$SINCE" --format='%h %ad %an | %s' --date=short --name-status | head -150
-sec "commits in the window on origin/$DEFAULT (as last fetched; this probe does not fetch)"
-git log "origin/$DEFAULT" --since="$SINCE" --format='%h %ad %an | %s' --date=short 2>/dev/null | head -40
+sec "commits in the window on origin/$DEFAULT, with the files each touched (as last fetched; this probe does not fetch)"
+git log "origin/$DEFAULT" --since="$SINCE" --format='%h %ad %an | %s' --date=short --name-status 2>/dev/null | head -150
 sec "this branch against origin/$DEFAULT: files changed since the merge base"
 git diff --stat "origin/$DEFAULT...HEAD" 2>/dev/null | tail -25
 
