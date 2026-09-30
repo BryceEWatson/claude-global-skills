@@ -14,7 +14,7 @@ Optimize for *truth and resumability*, not for sounding complete.
 
 ## Step 0 — Decide how much close-out this session needs
 
-A full run costs about a dozen turns, and each one re-reads a whole end-of-session context, so spend it
+A full run can take a dozen or so turns [estimate], and each one re-reads a whole end-of-session context, so spend it
 where the record gets used. Handoffs are read by the next session that continues the work, by a
 project's status and wiki passes, and by the weekly work log. None of those need a handoff for work
 that already lives in a pull request: git and the PR body carry it.
@@ -29,8 +29,8 @@ that already lives in a pull request: git and the PR body carry it.
   the choice is visible and the operator can ask for the full record.
 - Unsure which applies: run the full record. A missing record is the more expensive mistake.
 
-**Turn budget.** Evidence in one call (the Step 1 probe), the handoff in one write, then the contract
-and the closing message. Do not run the probes one at a time, and do not re-read files that are
+**Turn budget.** Evidence in one call (the Step 1 probe), the handoff in one write (amended once if a
+close-out contract changes state), then the contract, the Step 4c question and the closing message. Do not run the probes one at a time, and do not re-read files that are
 already in context.
 
 ## Operating principle: ground in artifacts, never in memory alone
@@ -284,13 +284,14 @@ breaks, a convention or trap, a decision and the reason for it, a pattern with e
 the project's own goals or NEXT-ACTIONS. A rule about how Claude should behave is not it either; that is
 auto-memory.
 
-- **No:** say nothing and take no step. Most sessions answer no.
+- **No:** say nothing and take no step. Expect most sessions to answer no.
 - **Yes:** run the global `wiki` skill's `learn` procedure for it before closing: a draft, the pages, a
   claims manifest, then `node "$HOME/.claude/skills/wiki/lane.mjs" land`. Put the pull request it prints in
   the closing message, and when a handoff is written, list it under Artifacts as `wiki: <pull request>`;
   the lane's own output is its evidence (see the gate below). If the lane refuses the write
   and the fix is not quick, name what was learned and why it did not land under **Open threads** instead,
-  so the knowledge survives the session.
+  so the knowledge survives the session. On a light close there is no handoff to hold it, so write the
+  full record instead: knowledge left only in chat is lost with the session.
 - **No `wiki` skill installed** (a machine without Command's kit): skip, and say so in one line.
 
 ## Step 5 — Emit the continuation prompt (ONLY if work is mid-flight)
@@ -315,8 +316,8 @@ session. It MUST:
    a snapshot: commits land, branches move, and another session may have advanced or abandoned the
    work. The rules that catch that travel in the prompt, because a continued session starts from the
    pasted prompt and nothing else. (They used to live in a separate `session-pickup` skill, retired
-   2026-09-16: across every project's logs it had run 7 times, against 25 sessions that simply pasted
-   the prompt.)
+   2026-09-16 after a search of the operator's session logs counted 7 invocations of it against 25
+   continued sessions that opened with the pasted prompt instead [measured then, not re-checked here].)
 
    ```text
    Before acting, reconcile this prompt with current reality. The handoff was a snapshot.
@@ -337,8 +338,9 @@ Present it in a fenced block, ready to paste. Keep it tight but complete — it 
 ## Safety + quality gate
 
 - **Read-only to the repo** except (a) writing the one handoff file and (b) whatever a declared close-out
-  contract authorizes (Step 4b). No commits. Absent such a contract, no edits to other files.
-- **The handoff went to the primary checkout**, not a worktree that is about to be deleted (Step 4), and
+  contract authorizes (Step 4b). No commits. Absent such a contract, no edits to other files. The Step 4c
+  wiki lane is outside this rule: it writes and commits only in the wiki repository, through its own PR.
+- **When a handoff is written, it went to the primary checkout**, not a worktree that is about to be deleted (Step 4), and
   its absolute path is stated in the closing message.
 - Every cited artifact exists in `git status`/on disk, **in the widened evidence** of Step 1, **is the
   wiki pull request a Step 4c lane run printed** (that output is its evidence; it lives in another

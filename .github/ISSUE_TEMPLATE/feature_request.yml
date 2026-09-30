@@ -40,7 +40,6 @@ body:
         - review-loop
         - seo-index-validation
         - session-end
-        - session-pickup
         - transcript-analysis
         - weekly-work-log
         - tooling / scripts (sync.py, hooks, repo plumbing)

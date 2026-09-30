@@ -11,6 +11,14 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Changed
 
+- **`session-end`: a light close, a one-call evidence probe, and one question about durable knowledge.**
+  A session whose work already sits in pull requests can now close in chat with no handoff file.
+  Step 1's evidence comes from one read-only script, `probe.sh`, which works with GNU date, BSD date
+  (macOS) and Git Bash. A new Step 4c asks whether the session learned something another session would
+  have to rediscover and, if so, lands it through the `wiki` skill's lane. The continuation prompt now
+  carries its own reconcile block, which replaces the separate `session-pickup` skill; that skill is
+  removed from this repository, the README and the issue templates.
+
 - **`weekly-work-log`: the Monday run checks the live site, and the Sunday run pulls honestweek.**
   The Monday follow-up now fetches nine key brycewatson.com pages and reads the last deploy
   before anything else, and raises a failure to Bryce on one standing issue through the `ask`

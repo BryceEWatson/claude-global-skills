@@ -51,9 +51,9 @@ sec "uncommitted diff stat"
 git diff --stat | tail -25
 sec "last 15 commits on $BRANCH"
 git log --oneline -15
-sec "commits in the window on $BRANCH, with the files each touched"
+sec "commits in the window on $BRANCH, with the files each touched (first 150 lines)"
 git log --since="$SINCE" --format='%h %ad %an | %s' --date=short --name-status | head -150
-sec "commits in the window on origin/$DEFAULT, with the files each touched (as last fetched; this probe does not fetch)"
+sec "commits in the window on origin/$DEFAULT, with the files each touched (first 150 lines; as last fetched, this probe does not fetch)"
 git log "origin/$DEFAULT" --since="$SINCE" --format='%h %ad %an | %s' --date=short --name-status 2>/dev/null | head -150
 sec "this branch against origin/$DEFAULT: files changed since the merge base"
 git diff --stat "origin/$DEFAULT...HEAD" 2>/dev/null | tail -25
@@ -72,6 +72,9 @@ if command -v gh >/dev/null 2>&1; then
   OPEN=$(gh pr list --state open --author @me --search "updated:>=$SINCE_DAY" --limit 30 --json number,title,headRefName,updatedAt \
     -q '.[] | "#\(.number) \(.updatedAt[0:16]) \(.headRefName) | \(.title)"' 2>&1)
   if [ -n "$OPEN" ]; then printf '%s\n' "$OPEN"; else echo "(none)"; fi
+  if [ "$(printf '%s\n' "$OPEN" | grep -c '^#')" -ge 30 ]; then
+    echo "WARNING: hit the limit of 30. Raise it before reporting a count."
+  fi
 else
   echo "gh is not installed: could not list pull requests. Say so in the record; do not report none."
 fi
