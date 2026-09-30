@@ -29,8 +29,9 @@ that already lives in a pull request: git and the PR body carry it.
   the choice is visible and the operator can ask for the full record.
 - Unsure which applies: run the full record. A missing record is the more expensive mistake.
 
-**Turn budget.** Evidence in one call (the Step 1 probe), the handoff in one write (amended once if a
-close-out contract changes state), then the contract, the Step 4c question and the closing message. Do not run the probes one at a time, and do not re-read files that are
+**Turn budget.** Evidence in one call (the Step 1 probe), the handoff in one write, then the contract and the Step 4c
+question, then at most one amendment covering both (a contract that changed state, a wiki PR that
+landed or failed), then the closing message. Do not run the probes one at a time, and do not re-read files that are
 already in context.
 
 ## Operating principle: ground in artifacts, never in memory alone
