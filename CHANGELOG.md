@@ -11,6 +11,14 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Changed
 
+- **`weekly-work-log`: the log covers allowlisted repos only, so client and free-check work
+  leaves no trace.** The privacy rule and the Sunday prompt now state the default-deny scope
+  the brycewatson.com discovery code enforces: a session outside the allowlisted repos (an
+  unknown folder, the Watson Standard hub) gets no digest entry, no row (not even a redacted
+  one) and no count, and the hub's client folders, Open Hours and client code are excluded
+  even if an allowlist entry would cover them. Apart from display-role rows, no row mentions a
+  client's work or a free check, even in general terms. Closes risk 10 of the Watson Standard
+  promise audit.
 - **`weekly-work-log`: one stuck PR no longer stops the weekly log, and the miner is paused.**
   When exactly one weekly or backfill PR from an earlier week is still open, `weekly-pr-guard.cjs`
   now returns `ROLL` (exit 12) instead of failing. The Sunday run builds the new week on top of
