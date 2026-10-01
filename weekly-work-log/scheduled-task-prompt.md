@@ -7,7 +7,8 @@ NO memory of any prior conversation. This file is the source: edit it here, depl
 `update_scheduled_task({ taskId: "weekly-work-log", prompt: ... })`.
 
 The model is **judgment DRAFTS, the gates DECIDE**. You curate EVERY interactive Claude Code
-session of the week into the page, open one PR, and let the merge gate decide whether it may
+session of the week **that appears in the allowlisted digest** into the page, open one PR, and let
+the merge gate decide whether it may
 merge itself. On 2026-09-10 Bryce authorized exactly that ("auto": the weekly work-log PR may
 merge when every deterministic gate passes and the advisory raises no flag). Anything the gate
 holds waits for him. The LinkedIn candidate and the post card never publish themselves.
