@@ -7,7 +7,8 @@ NO memory of any prior conversation. This file is the source: edit it here, depl
 `update_scheduled_task({ taskId: "weekly-work-log", prompt: ... })`.
 
 The model is **judgment DRAFTS, the gates DECIDE**. You curate EVERY interactive Claude Code
-session of the week into the page, open one PR, and let the merge gate decide whether it may
+session of the week **that appears in the allowlisted digest** into the page, open one PR, and let
+the merge gate decide whether it may
 merge itself. On 2026-09-10 Bryce authorized exactly that ("auto": the weekly work-log PR may
 merge when every deterministic gate passes and the advisory raises no flag). Anything the gate
 holds waits for him. The LinkedIn candidate and the post card never publish themselves.
@@ -88,9 +89,11 @@ Follow `~/.claude/skills/weekly-work-log/SKILL.md` rules exactly. Do these steps
   digest, written to `src/data/work-log.handoffs.json`.
 - `node scripts/draft-work-log-sessions.mjs` (the per-session digest — the unit of
   curation). This writes the redacted, bounded `src/data/work-log.drafts.json`: one
-  entry per interactive Claude Code session of the week (id, date, project, repo,
-  `isPrivate`, redacted `userPrompts` steers, the assistant's own redacted `assistantNotes`
-  reasoning, `toolCounts`, redacted `candidateCommits`).
+  entry per interactive Claude Code session of the week in an allowlisted repo (id, date,
+  project, repo, `isPrivate` for a display-role project, redacted `userPrompts` steers, the
+  assistant's own redacted `assistantNotes` reasoning, `toolCounts`, redacted
+  `candidateCommits`). A session anywhere else (an unknown folder, the Watson Standard hub,
+  its client or Open Hours folders, client code) is excluded before the digest is written.
 - If the handoff digest scanned zero handoffs or no session carries a candidate commit, the
   scripts could not see the sibling repositories: confirm WORKTREE's parent folder is
   `C:\Users\Bryce\Projects`. Never curate from a blind digest; persist `DISCOVERY_BLIND` and STOP.
@@ -180,6 +183,11 @@ JavaScript, Python, or shell string: the 16 August run lost every apostrophe tha
   public-facing". **Accuracy is the hard floor even here.** NO `primaryCommit`, NO `repo`,
   NO `snippets.verify` — these repos are NEVER git-read. Use the session `date`. Never name
   the client, niche, people, product, accounts, amounts, or codenames.
+- **Work outside the allowlisted repos never appears.** Neither digest holds a session from
+  an unknown folder, the Watson Standard hub, its client or Open Hours folders, or client
+  code, so there is nothing to curate from them. Apart from the display-role rows above,
+  which stay under their own label, no row mentions a client's work or a free check, even in
+  general terms: if a handoff or another project's session refers to one, leave that part out.
 - **Per-project goal lines:** for any project new to `source.json`, add a `projects[]` entry
   with a durable `mission` (from the project's CHARTER/README, not one week) + a this-week
   `frontier` (derived). Display-role projects get a generalized mission too.
