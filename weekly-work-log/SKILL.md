@@ -1,6 +1,7 @@
 ---
 name: weekly-work-log
-description: Build and refresh the brycewatson.com "Weekly Work Log" report page (/weekly-report, archived under /log) for the last completed week. Discovers the week's work from session-end handoffs + git, distils it into honest public-voice items, re-derives and verifies every number, and (unattended, every Sunday night via a Claude scheduled task) opens one PR that merges itself only through a merge gate (Owner ruling 2026-09-10: every deterministic gate green and no advisory flag), plus a LinkedIn candidate and a post card that never publish themselves.
+description: >-
+  Build and refresh the brycewatson.com "Weekly Work Log" report page (/weekly-report, archived under /log) for the last completed week. Discovers the week's work from session-end handoffs + git, distils it into honest public-voice items, re-derives and verifies every number, and (unattended, every Sunday night via a Claude scheduled task) opens one PR that merges itself only through a merge gate (Owner ruling 2026-09-10: every deterministic gate green and no advisory flag), plus a LinkedIn candidate and a post card that never publish themselves.
 user-invocable: true
 argument-hint: "[--weekly] [--days N] [--week YYYY-MM-DD]"
 ---
