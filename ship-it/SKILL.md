@@ -117,8 +117,20 @@ Two required layers.
   if one is present in this project, else drive the running UI / preview directly*); for a CLI/server, run it
   and observe real behavior. The native `run`/`verify` commands are portable fallbacks.
 
-Design at least one **failure-path** check per success path. Inspect the actual output/screenshots — don't
-claim "verified" from a mental model. Failures loop back to Step 6, then re-test.
+Design the validation before you trust it:
+- **Test composed behavior, not just components in isolation.** Exercise the whole path with every part
+  active at once (for example, the full WHERE clause with all filters on, not each condition separately).
+- **One failure path for every success path.** Ask "what happens when the retry fails?", not just "does
+  success reset the count?"
+- **At least one adversarial experiment per validation pass.** Ask "under what conditions does this NOT
+  work?" and run that case.
+- **Validate the post-implementation state.** When you add a column or field, check every existing write
+  path (success paths included) for the update it now needs.
+- **Run an adversarial review agent before finalizing experiment results.** When the result is an
+  analytical conclusion rather than code, `/review-loop --mode claim` is that agent.
+
+Inspect the actual output/screenshots — don't claim "verified" from a mental model. Failures loop back to
+Step 6, then re-test.
 
 ## Step 8 — PR + publish wall (HARD)
 
@@ -147,7 +159,8 @@ manual run didn't already cover (it skips an already-dispatched diff), so the tr
 If context fills at **any** step, invoke `session-end` in mid-flight mode → it writes a durable handoff to
 `.claude/handoffs/` (exact resumable state: last step → next, files in play, pinned scope/plan/done-state,
 verification debts) + a paste-ready continuation prompt, so the build resumes losslessly in a fresh session.
-The next session resumes from that continuation prompt. A multi-hour build hands off rather than dying half-done.
+The prompt ends with a reconcile block, so the fresh session checks the handoff against current state
+before acting. A multi-hour build hands off rather than dying half-done.
 
 ## Gates / safety
 
@@ -163,7 +176,7 @@ The next session resumes from that continuation prompt. A multi-hour build hands
 ## Complements (not duplicates)
 
 `/review-loop` is one **segment** (review only) — `ship-it` invokes it at two checkpoints (plan + PR) and
-loops on its verdict. `session-end` is session **lifecycle** (close, and the continuation prompt that resumes), used here only
+loops on its verdict. `session-end` is session **lifecycle** (close, and hand off when mid-flight), used here only
 as the mid-build escape hatch. The analysis/mining skills (`pattern-retrospective`, `transcript-analysis`,
 `chat-history-search`, `global-review-loop`) are **backward-looking**. `ship-it` is the forward-looking
 **driver** that chains research → PR → reviewed-done — the one thing none of the others do end to end.

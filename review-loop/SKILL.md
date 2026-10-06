@@ -9,7 +9,9 @@ description: |
   outside plan mode. `--mode claim` reviews an analytical conclusion against its
   primary sources instead of a diff; `--mode deliverable` reviews finished
   reader-facing work (a report, a content page, a decision briefing) for whether
-  the human it is handed to can actually use it.
+  the human it is handed to can actually use it. Skip the next automatic run with
+  `touch ~/.claude/skills/review-loop/.skip-next`; opt a repo out with
+  `.claude/review-loop.disabled`.
 allowed-tools: Read, Grep, Glob, Bash, Task, Edit, Write
 ---
 
@@ -19,6 +21,26 @@ You are running the auto-review-loop skill. The Stop hook installed at
 `~/.claude/skills/review-loop/stop-hook.cjs` invoked you after Claude
 finished a session with real code changes outside plan mode. (Or the user
 invoked you manually.)
+
+## When it runs, and the off-switches
+
+After any session with real code changes (Edit or Write tool use plus a non-empty `git diff`) outside plan
+mode, the Stop hook invokes this skill automatically. The hook enforces that, so no session has to remember
+to start a review. This section is the user-facing documentation of the hook: keep it in step with
+`stop-hook.cjs` and `install.cjs`. When someone asks how to pause or tune the automatic review, these are
+the switches:
+
+- **Skip once:** `touch ~/.claude/skills/review-loop/.skip-next`. The hook consumes the marker at the next stop.
+- **Disable per project:** create `.claude/review-loop.disabled` at the repo root.
+- **Disable specific reviewer roles per project:** `.claude/review-loop.disabled-roles`, one role name per
+  line (the agent file's name without `.md`). Step 4 skips each listed lens.
+- **State:** `~/.claude/skills/review-loop/.local-state/<session-id>.json`.
+- **Install manifest:** `~/.claude/skills/review-loop/.local-state/install-manifest.json`.
+- **Install / uninstall:** `node ~/.claude/skills/review-loop/install.cjs` /
+  `node ~/.claude/skills/review-loop/uninstall.cjs`.
+
+The other per-project knobs (plan paths, code extensions, deliverable paths and the deliverable standard)
+are listed under Notes at the end.
 
 ## Argument parsing
 
@@ -261,7 +283,8 @@ load, which must surface as a `checklist-unavailable` finding instead.
 
 #### Dispatch (all modes)
 
-For each enabled agent file, dispatch a `Task` (subagent_type: `general-purpose`) with:
+For each enabled agent file (a lens is disabled when its file name without `.md` is listed in the project's
+`.claude/review-loop.disabled-roles`), dispatch a `Task` (subagent_type: `general-purpose`) with:
 - The agent file's full body as the system instruction
 - The diff + file list + branch name (plan mode: include the full content of changed plan files, not just the diff — review needs the surrounding doc context; **claim mode: include the verbatim claims under review + pointers to the primary sources/transcripts/data they cite, and instruct each reviewer to read those sources directly — its job is to break the claim against ground truth, not critique prose**; **deliverable mode: include the FULL text of each changed deliverable (never only the diff), the rendered form where one exists, and the contents of `.claude/review-loop.deliverable-standard` if present — a one-line pointer to the project's own standard — plus the document it points at, so the lens can load it as additional checks**)
 - For iteration ≥ 2: the prior iteration's findings injected as a **Reflexion-style verbal reflection** (prepend: *"In the prior iteration you flagged: [list]. The developer applied fixes. Your new findings should reflect what's now true rather than re-litigate prior decisions."*)
