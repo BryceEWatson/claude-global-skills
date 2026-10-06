@@ -1,6 +1,7 @@
 ---
 name: email-editorial-pass
-description: Run brycewatson.com's editorial voice pass over any outbound email BEFORE the draft is created. Fires on drafting, replying to, or composing any external / client / lead email on Bryce's behalf, including any create_draft of mail he sends. Outbound email clears the same voice bar as published content: no em dashes, no hype, first person + contractions, front-loaded point.
+description: >-
+  Run brycewatson.com's editorial voice pass over any outbound email BEFORE the draft is created. Fires on drafting, replying to, or composing any external / client / lead email on Bryce's behalf, including any create_draft of mail he sends. Outbound email clears the same voice bar as published content: no em dashes, no hype, first person + contractions, front-loaded point.
 user-invocable: true
 ---
 

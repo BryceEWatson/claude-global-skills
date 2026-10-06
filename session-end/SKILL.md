@@ -1,6 +1,7 @@
 ---
 name: session-end
-description: End or close out the current Claude Code session, producing an evidence-grounded record of what happened: decisions and rationale, claims and their verification status, load-bearing assumptions, artifacts changed, reversals. When work is mid-flight it also hands off, emitting a ready-to-paste continuation prompt for a fresh session. When everything already sits in pull requests it closes light, with no handoff file. Formerly "session-handoff"; handoff is now its mid-flight mode.
+description: >-
+  End or close out the current Claude Code session, producing an evidence-grounded record of what happened: decisions and rationale, claims and their verification status, load-bearing assumptions, artifacts changed, reversals. When work is mid-flight it also hands off, emitting a ready-to-paste continuation prompt for a fresh session. When everything already sits in pull requests it closes light, with no handoff file. Formerly "session-handoff"; handoff is now its mid-flight mode.
 allowed-tools: Bash, Read, Grep, Glob, Write, TodoWrite
 ---
 
