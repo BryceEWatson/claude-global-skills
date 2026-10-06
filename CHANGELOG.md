@@ -14,9 +14,13 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 - **`review-loop` and `ship-it` carry two sections that lived in the global `~/.claude/CLAUDE.md`.**
   `review-loop` gains "When it runs, and the off-switches": the Stop hook's trigger, the skip-once
   marker, per-project opt-out and disabled roles, the state and install-manifest paths, and the
-  install and uninstall commands. Its description now names the skip-once marker and the per-repo
-  opt-out, and Step 4 says how `.claude/review-loop.disabled-roles` disables any lens, not only
-  statistical rigor. `ship-it` Step 7 gains the validation rules: test composed behavior, one
+  install and uninstall commands. The trigger is described the way the hook measures it (reviewable
+  tracked or untracked files, not "Edit/Write plus a diff"), and the opt-out marker is placed where
+  the hook looks for it (the session's working directory, not the Git root). Its description now
+  names the skip-once marker and the per-repo opt-out. Step 4 lets
+  `.claude/review-loop.disabled-roles` disable any `Task` lens, not only statistical rigor; the
+  execution-grounded check can't be disabled, and a run left with no enabled lens stops as
+  `stalled` instead of reporting clean. `ship-it` Step 7 gains the validation rules: test composed behavior, one
   failure path per success path, one adversarial experiment per pass, check every existing write
   path after adding a field, and an adversarial review before finalizing experiment results. Two
   lines the installed `ship-it` had and this repo didn't (the handoff's reconcile block, and
