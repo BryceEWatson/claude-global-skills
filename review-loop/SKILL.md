@@ -9,7 +9,9 @@ description: |
   outside plan mode. `--mode claim` reviews an analytical conclusion against its
   primary sources instead of a diff; `--mode deliverable` reviews finished
   reader-facing work (a report, a content page, a decision briefing) for whether
-  the human it is handed to can actually use it.
+  the human it is handed to can actually use it. Skip the next automatic run with
+  `touch ~/.claude/skills/review-loop/.skip-next`; opt a repo out with
+  `.claude/review-loop.disabled`.
 allowed-tools: Read, Grep, Glob, Bash, Task, Edit, Write
 ---
 
@@ -19,6 +21,40 @@ You are running the auto-review-loop skill. The Stop hook installed at
 `~/.claude/skills/review-loop/stop-hook.cjs` invoked you after Claude
 finished a session with real code changes outside plan mode. (Or the user
 invoked you manually.)
+
+## When it runs, and the off-switches
+
+When a session outside plan mode stops with reviewable work in the repo, the Stop hook invokes this skill
+automatically. The hook enforces that, so no session has to remember to start a review. This section is the
+user-facing documentation of the hook: keep it in step with `stop-hook.cjs` and `install.cjs`.
+
+What counts as reviewable is measured on the working tree, not on which tools ran. The hook takes the
+tracked changes against `HEAD` plus untracked files Git doesn't ignore, keeps the ones that count as code,
+plan or deliverable files, and runs only when that set isn't empty. So a new untracked source file made
+with Write triggers it, and so does a dirty tracked diff with no Edit or Write at all. It skips when the
+transcript (its last 200 KB) shows no Edit or Write and `git diff HEAD` is empty, even if untracked files
+exist; when nothing reviewable changed (only docs, handoffs, lockfiles, scratch or generated files); and
+when it already dispatched a review for this exact diff.
+
+When someone asks how to pause or tune the automatic review, these are the switches:
+
+- **Skip once:** `touch ~/.claude/skills/review-loop/.skip-next`. The hook consumes the marker at the next stop.
+- **Disable per project:** create `.claude/review-loop.disabled` in the directory the session runs from.
+  The hook looks for it under the session's working directory, not the Git top level, so a marker at the
+  repo root doesn't reach a session started in a subdirectory. Normally that's the same place; if you
+  launch from a subdirectory, put the marker there too. Every per-project file the hook reads (this one
+  and the plan-path, code-extension and deliverable-path overrides under Notes) resolves the same way.
+- **Disable specific reviewer roles per project:** `.claude/review-loop.disabled-roles`, one lens name per
+  line (the agent file's name without `.md`). Step 4 skips each listed `Task` lens. It can't switch off
+  the execution-grounded check, which runs in code mode regardless, and a run left with no enabled lens
+  for its mode stops as not clean rather than reporting clean (see "Dispatch (all modes)" in Step 4).
+- **State:** `~/.claude/skills/review-loop/.local-state/<session-id>.json`.
+- **Install manifest:** `~/.claude/skills/review-loop/.local-state/install-manifest.json`.
+- **Install / uninstall:** `node ~/.claude/skills/review-loop/install.cjs` /
+  `node ~/.claude/skills/review-loop/uninstall.cjs`.
+
+The other per-project knobs (plan paths, code extensions, deliverable paths and the deliverable standard)
+are listed under Notes at the end.
 
 ## Argument parsing
 
@@ -191,7 +227,7 @@ Read the 6 agent files:
 - `agents/adversarial.md`
 - `agents/ship-readiness.md`
 - `agents/statistical-rigor.md` (skip if project has `.claude/review-loop.disabled-roles` listing `statistical-rigor`)
-- `agents/execution-grounded.md` (special — see below)
+- `agents/execution-grounded.md` (special — see below; `disabled-roles` does not apply to it)
 
 #### Mode `plan`
 
@@ -261,7 +297,9 @@ load, which must surface as a `checklist-unavailable` finding instead.
 
 #### Dispatch (all modes)
 
-For each enabled agent file, dispatch a `Task` (subagent_type: `general-purpose`) with:
+For each enabled agent file (a `Task` lens is disabled when its file name without `.md` is listed in the
+project's `.claude/review-loop.disabled-roles`; `execution-grounded` is not a `Task` lens and ignores that
+file), dispatch a `Task` (subagent_type: `general-purpose`) with:
 - The agent file's full body as the system instruction
 - The diff + file list + branch name (plan mode: include the full content of changed plan files, not just the diff — review needs the surrounding doc context; **claim mode: include the verbatim claims under review + pointers to the primary sources/transcripts/data they cite, and instruct each reviewer to read those sources directly — its job is to break the claim against ground truth, not critique prose**; **deliverable mode: include the FULL text of each changed deliverable (never only the diff), the rendered form where one exists, and the contents of `.claude/review-loop.deliverable-standard` if present — a one-line pointer to the project's own standard — plus the document it points at, so the lens can load it as additional checks**)
 - For iteration ≥ 2: the prior iteration's findings injected as a **Reflexion-style verbal reflection** (prepend: *"In the prior iteration you flagged: [list]. The developer applied fixes. Your new findings should reflect what's now true rather than re-litigate prior decisions."*)
@@ -270,7 +308,16 @@ For each enabled agent file, dispatch a `Task` (subagent_type: `general-purpose`
 - **Claim mode only — hard CLAIM DISCIPLINE block**: "You are reviewing an analytical CONCLUSION, not code. Ground every finding in the cited primary source (read it; do not trust the analysis's own summary of it). Valid findings: a load-bearing claim contradicted or unsupported by the source, disconfirming evidence the analysis omitted, a method flaw that makes the claim unsupportable, overstatement vs. stated confidence. A failed falsification (you tried and could NOT break a claim) is a valid, useful result — report it. Cap at 6 findings; quality over quantity."
 - **Deliverable mode only — hard DELIVERABLE DISCIPLINE block**: "You are reviewing FINISHED work for whether its reader can use it — not whether it is correct, complete, or well-written. Assign the genre first; the checks are genre-dependent and mis-assigning it is how this lens produces noise. Every finding must carry a COUNT you measured (inventories, tables, list items, words per heading, sentence lengths) and must name the thing and the fix — which inventory becomes which table with which columns, which two sentences the answer moves into. 'Consider adding structure' is not a finding. Do not flag correctness, completeness, prose style, or word choice. A clean deliverable returns `[]`. Cap at 5 findings. The single exception to the count rule is a `checklist-unavailable` finding, which reports that a declared project standard could not be read and needs no measurement."
 
-All LLM reviewers dispatch in parallel (one message, multiple `Task` calls). Code mode: 5 lenses. Plan mode: 4 lenses. Claim mode: 4 lenses. Deliverable mode: 1 lens.
+All LLM reviewers dispatch in parallel (one message, multiple `Task` calls). Code mode: 5 lenses. Plan mode: 4 lenses. Claim mode: 4 lenses. Deliverable mode: 1 lens. Those counts are before `disabled-roles`; record each lens it removed, by name, on the PR verdict.
+
+**No enabled lens is not a clean review.** If `disabled-roles` leaves the current mode with zero `Task`
+lenses (deliverable mode has one, so listing `operator-empathy` does it; code mode counts only its five LLM
+lenses, so the execution-grounded check alone doesn't save it), dispatch nothing and skip Steps 5 to 7.
+Write `completion: 'stalled'` to state, emit `<promise>review-stalled</promise>` with one line naming the
+mode and the lenses `.claude/review-loop.disabled-roles` removed, release locks, and post the PR verdict
+as `stalled — no enabled lenses for <mode>`. Never write `review-clean` for a run that reviewed nothing:
+an empty findings list from zero reviewers would otherwise read as a clean review, and that token is what
+lets a change land.
 
 The **execution-grounded** reviewer (code mode only): not a Task dispatch. Invoke Bash directly to run the project's `pnpm lint`, `pnpm test`, `pnpm build` (or `npm run lint/test/build` if no pnpm-lock.yaml exists). Capture exit codes and stderr. Each non-zero exit → one finding with severity `high`, confidence `100`, `load_bearing: true`, category `execution-failure`, claim describing the failure. Timeout: 180s.
 
@@ -378,6 +425,7 @@ those post nothing.
 **Reviewed:** `<scope/range>` on `<headRefName>` · **iterations:** <n> · **method:** automated multi-agent
 review-loop — <K> lens subagents (<names>) in independent contexts + an execution-grounded lint/test/build
 check. Findings falsified against the diff; not a human review.
+**Skipped by `.claude/review-loop.disabled-roles`:** <lens names> (omit this line when none were skipped)
 
 **Verdict:** <review-clean ✅ | exhausted — N unresolved | stalled> <one line>
 **Independence:** <independent — the reviewing session did not author this diff | ⚠️ SELF-REVIEW — NOT INDEPENDENT | unverified — could not be determined, see below>
@@ -506,4 +554,4 @@ Print a one-line preamble: *"Running /review-loop on <branch>, iter <N>/<max>, s
 - Per memory entry `feedback-confidence-per-step`: each reviewer's prompt instructs it to **label `load_bearing` honestly** — in-iter fixes are limited to load-bearing items; speculative items surface as the exit checklist.
 - Per memory entry `feedback-claude-code-not-api`: when surfacing cost to the user, label as "plan usage (API-equivalent)" not "$X spent."
 - The Stop hook handles the infinite-loop guard (env var `CLAUDE_REVIEW_LOOP_ACTIVE=1` is set before each iteration's re-invocation); the skill itself does not need to check this — if you're running, you've been invited.
-- The Stop hook is a cheap **always-on gate, not an always-on review**: after the safety exits it also skips when **nothing reviewable changed** (only docs / handoffs / lockfiles / scratch / generated files) or when the **exact diff was already dispatched** for review, logging the decision to `.local-state/hook.log` either way. Per-project knobs under `<repo>/.claude/`: `review-loop.disabled` (opt out entirely), `review-loop.plan-paths` (globs that count as plan artifacts), `review-loop.code-exts` (extensions that count as reviewable code; the file replaces the built-in default set), `review-loop.deliverable-paths` (globs that count as reader-facing deliverables; also replaces its default set — but anything under `.claude/` stays excluded unconditionally and cannot be re-included by an override, since that path is session machinery), `review-loop.deliverable-standard` (a one-line **pointer** holding the path of the project's own deliverable/report standard, e.g. `docs/REPORT-READABILITY-STANDARD.md` — read by the lens, not by the hook, as additional checks; if it or its target can't be read the lens must say so rather than silently return `[]`).
+- The Stop hook is a cheap **always-on gate, not an always-on review**: after the safety exits it also skips when **nothing reviewable changed** (only docs / handoffs / lockfiles / scratch / generated files) or when the **exact diff was already dispatched** for review, logging the decision to `.local-state/hook.log` either way. Per-project knobs under `.claude/` in the session's working directory (normally the repo root; the hook reads these from the working directory, not the Git top level, see "When it runs, and the off-switches"): `review-loop.disabled` (opt out entirely), `review-loop.plan-paths` (globs that count as plan artifacts), `review-loop.code-exts` (extensions that count as reviewable code; the file replaces the built-in default set), `review-loop.deliverable-paths` (globs that count as reader-facing deliverables; also replaces its default set — but anything under `.claude/` stays excluded unconditionally and cannot be re-included by an override, since that path is session machinery), `review-loop.deliverable-standard` (a one-line **pointer** holding the path of the project's own deliverable/report standard, e.g. `docs/REPORT-READABILITY-STANDARD.md` — read by the lens, not by the hook, as additional checks; if it or its target can't be read the lens must say so rather than silently return `[]`).
