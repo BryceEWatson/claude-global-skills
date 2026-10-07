@@ -298,8 +298,10 @@ quality) and steadier blog posting. Everything here goes in one file,
         `git log --diff-filter=A -1 --format=%H -- <file>` prints its merge commit, and
         `gh api repos/BryceEWatson/brycewatson.com/commits/<merge commit>/pulls --jq '.[0].html_url'`
         prints the PR's URL. If either prints nothing, count it as a failed call. Take the card's
-        `headline` from the file (`post.card`). Write the issue body to a scratch file with the
-        file-writing tool, in plain words with no dashes, in this order:
+        `headline` from the file (`post.card`). Write the whole issue as UTF-8 JSON with the
+        file-writing tool to `scripts/.tmp/draft-post-issue.json` (gitignored):
+        `{ "title": "Draft the approved post: <card headline>", "body": "<the body>", "labels": ["needs-bryce"] }`.
+        The body is in plain words with no dashes, in this order:
         - **In plain terms:** Bryce answered `post: draft` on PR <n> (its URL), approving the
           post card "<card headline>" for drafting. A session started on this issue drafts it as
           a blog post on its own branch and PR, through the site's normal gates.
@@ -311,9 +313,11 @@ quality) and steadier blog posting. Everything here goes in one file,
           `src/content/blog`; and as the body's last line, exactly `changeId: <card changeId>`,
           which the lookup in sub-step 2 reads.
         Then run
-        `gh issue create --repo BryceEWatson/brycewatson.com --title "Draft the approved post: <card headline>" --label needs-bryce --body-file <that file>`.
-        The `needs-bryce` label is what lists it in Bryce's status brief, since nothing starts
-        a drafting session by itself.
+        `gh api repos/BryceEWatson/brycewatson.com/issues --input scripts/.tmp/draft-post-issue.json --jq .html_url`,
+        which prints the new issue's URL. Never put the headline or body on the command line: a
+        quote, `$` or backtick in a headline would break the shell, and that card would then fail
+        every week. The `needs-bryce` label is what lists it in Bryce's status brief, since nothing
+        starts a drafting session by itself.
      4. Report each card's issue URL, found or opened. If a `gh` or `git` call fails, name the
         card in the report and carry on: the issue never blocks the work log, the card stays
         approved in its file, and the next run tries it again.

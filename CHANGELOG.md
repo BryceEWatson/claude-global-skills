@@ -25,6 +25,8 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   is already saved in its candidates file, which rides the weekly PR to `main`, and every run now
   scans all candidates files for approved cards with no issue yet and opens those, finding the PR
   Bryce answered on from the commit that added the file. A failed lookup opens nothing that run.
+  The issue's title, body and label go in a JSON file sent with `gh api .../issues --input`, so a
+  quote, `$` or backtick in a card headline can't break the shell.
   The never-publish rule is unchanged: the run never drafts, commits or
   publishes the post, and the draft still goes through the site's normal gates and Bryce's merge.
   The report names the issue. `SKILL.md`'s safety rule says the same.
