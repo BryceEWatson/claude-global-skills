@@ -132,7 +132,8 @@ For each digest session **not already represented** in `src/data/work-log.source
   **not** fall back to `date+project` for these — display-role collapse maps many distinct
   real projects onto one label, so two different private sessions on the same day share
   `date+project` and would wrongly dedupe or overwrite each other. Group sessions that did the
-  same piece of work into one item (a fleet of dispatched workers on one board item is one item),
+  same piece of work into one item (a fleet of dispatched workers on one issue, or on one board
+  item before the board retired in October 2026, is one item),
   and give it a stable id `wl-auto-<weekEnd>-<project prefix>-<two or three plain words>` so a
   re-run matches the existing item instead of drafting a duplicate.
 
@@ -265,9 +266,34 @@ quality) and steadier blog posting. Everything here goes in one file,
    `linkedin: skip`, `post: draft`, `post: revise: <note>`, `post: no`), and ignores a reply to a
    side that was a skip. Then remove the ask label from that PR if present:
    `gh pr edit <n> --repo BryceEWatson/brycewatson.com --remove-label needs-bryce`.
-   - A `draft` answer: create one board item for a session to draft that post through the
-     site's normal gates:
-     `node "C:/Users/Bryce/.claude/board/bin/board.mjs" add --title "Draft the approved post: <card headline>" --repo brycewatson.com --files src/content/blog`
+   - A `draft` answer (the collect output's `post.value` is `approved`): open one issue on the
+     site repo so a session drafts that post through the site's normal gates. This run never
+     drafts, commits, or publishes the post itself, and the issue doesn't either.
+     1. Look for an issue already opened for this card, open or closed, so a re-run never files
+        a twin:
+        `gh issue list --repo BryceEWatson/brycewatson.com --state all --limit 200 --json url,body --jq '.[] | select(.body | contains("changeId: <card changeId>")) | .url'`
+        If it prints a URL, keep that URL for the report and open nothing.
+     2. Otherwise take the card's `headline` and `changeId` from that candidates file
+        (`post.card`), and the PR's merge commit
+        (`gh pr view <n> --repo BryceEWatson/brycewatson.com --json mergeCommit --jq .mergeCommit.oid`).
+        Write the issue body to a scratch file with the file-writing tool, in plain words with
+        no dashes, in this order:
+        - **In plain terms:** Bryce answered `post: draft` on PR <n> (its URL), approving the
+          post card "<card headline>" for drafting. A session started on this issue drafts it as
+          a blog post on its own branch and PR, through the site's normal gates.
+        - **What you're deciding:** when to start that session, then whether to merge the draft
+          PR it opens. Nothing publishes until that PR merges; closing this issue drops the post.
+        - Under a `## Implementation detail` heading: the draft link, the approved card at the merge commit,
+          `https://github.com/BryceEWatson/brycewatson.com/blob/<merge commit>/data/weekly-candidates/<that date>.json`
+          (headline, sections, search phrase and evidence are under `post`); the post goes in
+          `src/content/blog`; and as the body's last line, exactly `changeId: <card changeId>`,
+          which step 1 reads.
+        Then run
+        `gh issue create --repo BryceEWatson/brycewatson.com --title "Draft the approved post: <card headline>" --label needs-bryce --body-file <that file>`.
+        The `needs-bryce` label is what lists it in Bryce's status brief, since nothing starts
+        a drafting session by itself.
+     3. Report the issue URL. If either `gh` call fails, say so in the report and carry on: the
+        issue never blocks the work log, and the answer stays recorded in the candidates file.
    - A `revise` answer: this week's post card is the revised card (same `changeId`), applying
      his note, unless `data/copy-preflight/runs.jsonl` already holds two `revise` rows for that
      `changeId` (`node scripts/copy-preflight.mjs metrics` lists it under "Objective recheck
@@ -364,6 +390,7 @@ holds the merge.)
 Report: PR URL and whether it MERGED or HELD (with the reasons); the build verification
 result; how many sessions were curated (public vs private-redacted); which advisory checks ran
 vs degraded and the flag count; the LinkedIn and post decisions (candidate or skip); last
-week's collected answers; the miner result. Do not deploy.
+week's collected answers, with the draft issue's URL when the post answer was `draft`; the
+miner result. Do not deploy.
 Remove the clean dedicated WORKTREE after recording the result; if cleanup fails, report it
 without changing the run status. Leave the user's BASE checkout untouched.

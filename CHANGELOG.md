@@ -11,6 +11,17 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Changed
 
+- **`weekly-work-log`: a `post: draft` answer now opens a GitHub issue instead of a board item.**
+  The board this step wrote to was retired on 6 October 2026, so the Sunday run's call to
+  `board.mjs add` would have left an approved post in a queue nothing reads any more, and would fail
+  outright once the board folder goes. The run now opens one
+  issue on BryceEWatson/brycewatson.com titled "Draft the approved post: <headline>", labelled
+  `needs-bryce` so the status brief lists it, carrying the link to the approved card at the merge
+  commit and a `changeId` line. Before opening one it looks for an issue with that `changeId`, open
+  or closed, so a re-run never files a twin (the board did the same by refusing a second item on
+  `src/content/blog`). The never-publish rule is unchanged: the run never drafts, commits or
+  publishes the post, and the draft still goes through the site's normal gates and Bryce's merge.
+  The report names the issue. `SKILL.md`'s safety rule says the same.
 - **`review-loop` and `ship-it` carry two sections that lived in the global `~/.claude/CLAUDE.md`.**
   `review-loop` gains "When it runs, and the off-switches": the Stop hook's trigger, the skip-once
   marker, per-project opt-out and disabled roles, the state and install-manifest paths, and the
