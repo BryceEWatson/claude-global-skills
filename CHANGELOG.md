@@ -19,7 +19,13 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   `needs-bryce` so the status brief lists it, carrying the link to the approved card at the merge
   commit and a `changeId` line. Before opening one it looks for an issue with that `changeId`, open
   or closed, so a re-run never files a twin (the board did the same by refusing a second item on
-  `src/content/blog`). The never-publish rule is unchanged: the run never drafts, commits or
+  `src/content/blog`). That lookup now passes the `changeId` through an environment variable, so
+  its jq filter has no inner double quotes for Windows PowerShell 5.1 to strip, and the step says
+  to run in Bash. A request whose issue could not be opened is no longer lost: the approved answer
+  is already saved in its candidates file, which rides the weekly PR to `main`, and every run now
+  scans all candidates files for approved cards with no issue yet and opens those, finding the PR
+  Bryce answered on from the commit that added the file. A failed lookup opens nothing that run.
+  The never-publish rule is unchanged: the run never drafts, commits or
   publishes the post, and the draft still goes through the site's normal gates and Bryce's merge.
   The report names the issue. `SKILL.md`'s safety rule says the same.
 - **`review-loop` and `ship-it` carry two sections that lived in the global `~/.claude/CLAUDE.md`.**

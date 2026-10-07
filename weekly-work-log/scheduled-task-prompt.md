@@ -260,24 +260,46 @@ quality) and steadier blog posting. Everything here goes in one file,
    the latest Sunday on or before that date (a run that fired late on a Monday still reported
    the week ending the day before). A weekly PR can also carry the week before's file, which only picked up collected
    answers; never collect into that one. If the reported week's file is not among the PR's
-   files, skip this step. Otherwise run
+   files, skip the collect and go straight to the approved-post check at the end of this item.
+   Otherwise run
    `node scripts/work-log-candidates.mjs collect <that path> --pr <n>`.
    It records only labeled replies from Bryce, one per line (`linkedin: posted`,
    `linkedin: skip`, `post: draft`, `post: revise: <note>`, `post: no`), and ignores a reply to a
    side that was a skip. Then remove the ask label from that PR if present:
    `gh pr edit <n> --repo BryceEWatson/brycewatson.com --remove-label needs-bryce`.
-   - A `draft` answer (the collect output's `post.value` is `approved`): open one issue on the
-     site repo so a session drafts that post through the site's normal gates. This run never
-     drafts, commits, or publishes the post itself, and the issue doesn't either.
-     1. Look for an issue already opened for this card, open or closed, so a re-run never files
-        a twin:
-        `gh issue list --repo BryceEWatson/brycewatson.com --state all --limit 200 --json url,body --jq '.[] | select(.body | contains("changeId: <card changeId>")) | .url'`
-        If it prints a URL, keep that URL for the report and open nothing.
-     2. Otherwise take the card's `headline` and `changeId` from that candidates file
-        (`post.card`), and the PR's merge commit
-        (`gh pr view <n> --repo BryceEWatson/brycewatson.com --json mergeCommit --jq .mergeCommit.oid`).
-        Write the issue body to a scratch file with the file-writing tool, in plain words with
-        no dashes, in this order:
+   - A `draft` answer (the collect output's `post.value` is `approved`) is now stored in that
+     candidates file as `post.verdict.value: "approved"`. The approved-post check below turns it
+     into an issue.
+   - A `revise` answer: this week's post card is the revised card (same `changeId`), applying
+     his note, unless `data/copy-preflight/runs.jsonl` already holds two `revise` rows for that
+     `changeId` (`node scripts/copy-preflight.mjs metrics` lists it under "Objective recheck
+     required"), in which case skip with the reason "the objective needs rechecking before a
+     third card".
+   - **Approved-post check. Run it on every run, even when the collect above was skipped or
+     found no answer.** It opens one issue on the site repo for each approved post card that has
+     none yet, so a session drafts that post through the site's normal gates. This run never
+     drafts, commits, or publishes the post itself, and the issue doesn't either. The approved
+     answer in the candidates file is the durable record of the request: the file rides this
+     run's PR, so a card whose issue could not be opened this time is still approved on the next
+     run, which opens it then. The issue's `changeId` line is what marks a card as done. Run these
+     commands in Bash (Git Bash), not PowerShell, from WORKTREE.
+     1. List every approved card:
+        `node -e 'const fs=require("fs");const dir="data/weekly-candidates";for(const f of fs.readdirSync(dir).filter((n)=>n.endsWith(".json")).sort()){const p=JSON.parse(fs.readFileSync(dir+"/"+f,"utf8")).post||{};if(p.decision==="card"&&p.verdict&&p.verdict.value==="approved")console.log(dir+"/"+f+" "+p.card.changeId)}'`
+        It prints one line per approved card: the file's path, then the card's `changeId`. If it
+        prints nothing, there is nothing to open.
+     2. For each card, look for an issue already opened for it, open or closed, so a card never
+        gets a twin:
+        `CHANGE_LINE='changeId: <card changeId>' gh issue list --repo BryceEWatson/brycewatson.com --state all --limit 1000 --json url,body --jq '.[] | select(.body | contains($ENV.CHANGE_LINE)) | .url'`
+        The `changeId` travels in the `CHANGE_LINE` environment variable, so the jq filter holds
+        no double quotes for Windows PowerShell 5.1 to strip. If it prints a URL, keep that URL
+        for the report and open nothing for that card. Only a lookup that exits 0 and prints
+        nothing means no issue exists; if the lookup fails, open nothing for that card this run.
+     3. Otherwise find the weekly PR Bryce answered on, which is the PR that added that file:
+        `git log --diff-filter=A -1 --format=%H -- <file>` prints its merge commit, and
+        `gh api repos/BryceEWatson/brycewatson.com/commits/<merge commit>/pulls --jq '.[0].html_url'`
+        prints the PR's URL. If either prints nothing, count it as a failed call. Take the card's
+        `headline` from the file (`post.card`). Write the issue body to a scratch file with the
+        file-writing tool, in plain words with no dashes, in this order:
         - **In plain terms:** Bryce answered `post: draft` on PR <n> (its URL), approving the
           post card "<card headline>" for drafting. A session started on this issue drafts it as
           a blog post on its own branch and PR, through the site's normal gates.
@@ -287,18 +309,14 @@ quality) and steadier blog posting. Everything here goes in one file,
           `https://github.com/BryceEWatson/brycewatson.com/blob/<merge commit>/data/weekly-candidates/<that date>.json`
           (headline, sections, search phrase and evidence are under `post`); the post goes in
           `src/content/blog`; and as the body's last line, exactly `changeId: <card changeId>`,
-          which step 1 reads.
+          which the lookup in sub-step 2 reads.
         Then run
         `gh issue create --repo BryceEWatson/brycewatson.com --title "Draft the approved post: <card headline>" --label needs-bryce --body-file <that file>`.
         The `needs-bryce` label is what lists it in Bryce's status brief, since nothing starts
         a drafting session by itself.
-     3. Report the issue URL. If either `gh` call fails, say so in the report and carry on: the
-        issue never blocks the work log, and the answer stays recorded in the candidates file.
-   - A `revise` answer: this week's post card is the revised card (same `changeId`), applying
-     his note, unless `data/copy-preflight/runs.jsonl` already holds two `revise` rows for that
-     `changeId` (`node scripts/copy-preflight.mjs metrics` lists it under "Objective recheck
-     required"), in which case skip with the reason "the objective needs rechecking before a
-     third card".
+     4. Report each card's issue URL, found or opened. If a `gh` or `git` call fails, name the
+        card in the report and carry on: the issue never blocks the work log, the card stays
+        approved in its file, and the next run tries it again.
 2. **LinkedIn candidate** from this week's items, or an explicit skip. A candidate must meet
    all four parts of the quality bar, or it is a skip, never a weaker post:
    - a receipt: a commit, pull request, or measured number with a link (`receipt.url`);
@@ -390,7 +408,7 @@ holds the merge.)
 Report: PR URL and whether it MERGED or HELD (with the reasons); the build verification
 result; how many sessions were curated (public vs private-redacted); which advisory checks ran
 vs degraded and the flag count; the LinkedIn and post decisions (candidate or skip); last
-week's collected answers, with the draft issue's URL when the post answer was `draft`; the
-miner result. Do not deploy.
+week's collected answers; each approved post card's issue URL from the approved-post check,
+and any card whose issue could not be opened this run; the miner result. Do not deploy.
 Remove the clean dedicated WORKTREE after recording the result; if cleanup fails, report it
 without changing the run status. Leave the user's BASE checkout untouched.
