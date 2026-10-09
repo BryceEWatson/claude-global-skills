@@ -115,15 +115,17 @@ Review is validation, so it follows the same proportionate-validation rule as `s
 - **Extra review is a cost you justify.** Re-running a check that already passed on the same diff, or adding
   a round nobody asked for, needs a stated reason. The execution-grounded check still runs the project's
   lint, test and build as Step 4 says; any test you add beyond it is picked by its link to the change. Full
-  CI runs on the final candidate, and a testable build never waits on CI or on another review round.
+  CI runs on the PR head after each push (in `ship-it`, after its Step 8 push and again after each fix
+  that reaches the PR), and a testable build never waits on CI or on another review round.
 - **Thoroughness scales with users, blast radius and reversibility.** Every thoroughness rule in this
   skill (the lens set, the falsifier stage, the iteration loop, the cost ceiling) applies in proportion to
   blast radius. None is dropped, only sized. On a manual run, a reversible change few people use gets a
   short pass: a lower `--max-iter` (2 still leaves one round to fix and re-check; 1 leaves none, so any
   actionable finding ends the run `review-exhausted`) and lenses that keep to what the change can break.
   A change many people depend on, one that deploys on merge, or one that's hard to undo (a schema,
-  production data, a public page) gets the defaults and every lens at full depth. An automatic run keeps
-  the `--max-iter` and ceiling the Stop hook passed.
+  production data, a public page) gets the defaults and every lens at full depth. An automatic run
+  doesn't size itself: the Stop hook passes no `--max-iter` or `--cost-ceiling-tokens`, so it keeps the
+  defaults (`--max-iter 3`, the 300,000-token ceiling).
 - **Hard walls never relax.** However small the change, these hold at full strength: Step 0's independence
   gate, the execution-grounded check in code mode, the rule that a run with no enabled lens is never
   `review-clean`, never declaring clean at the budget wall, the commit-pinned verdict on the PR, and every

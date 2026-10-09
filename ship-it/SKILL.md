@@ -120,8 +120,10 @@ Two required layers.
 Size the validation before you design it (proportionate validation):
 - **Highest-value 20% first.** Build the one change that gets most of the outcome, and verify it in one
   run. Add hooks, audits, gates or dashboards only after a measured shortfall.
-- **Extra validation is a cost you justify.** Pick tests by their link to the change. Run full CI on the
-  final candidate. Never hold a testable build for CI: exercise the real app on it while CI runs.
+- **Extra validation is a cost you justify.** Pick tests by their link to the change. In this step, run
+  the project's own checks locally; full CI usually needs a push, so it comes after the publish wall. It
+  runs on the PR head after Step 8's push, and again after every Step 9 fix that reaches the PR. Never
+  hold a testable build for CI: while CI runs on a head, exercise the real app on that build.
 - **Rigor scales with users, blast radius and reversibility.** Every rule in this step, and the review in
   Step 9, applies in proportion to blast radius. A reversible change few people use meets each rule with
   a short pass over the paths it changed. A change many people depend on, or one that's hard to undo,
@@ -150,7 +152,8 @@ Step 6, then re-test.
 Behind the publish wall: verify new files are tracked (`git ls-files`) and the build passes from clean, then
 **confirm target + title + body with the operator BEFORE any push or PR creation** (outbound publish). Push
 the fresh branch and open the PR with native `gh pr create` only after consent. Surface the PR URL. The open
-PR is what lets the next step leave a durable, commit-pinned trail.
+PR is what lets the next step leave a durable, commit-pinned trail. Full CI runs on the PR head from this
+push on (Step 7 runs only local checks before the wall).
 
 ## Step 9 — Review the PR + loop until done
 
@@ -160,7 +163,9 @@ falsifier stage, in-iter fixes for load-bearing findings, re-review until clean 
 Because an open PR exists, it **always posts a commit-pinned verdict comment** (pinned to `headRefOid`,
 idempotent) — **that comment IS the required trail** ("a review without a trail is incomplete"). The global
 Stop hook is also armed as a forward backstop — it re-reviews only if new reviewable edits land that this
-manual run didn't already cover (it skips an already-dispatched diff), so the trail stays current.
+manual run didn't already cover (it skips an already-dispatched diff), so the trail stays current. Each
+fix that reaches the PR runs full CI again on the new head, so the CI that counts is the run on the final
+head.
 - **Definition-of-done gate:** declare done **only** when `<promise>review-clean</promise>` **AND** the
   commit-pinned PR comment is posted **AND** every in-scope plan item is implemented+tested **AND** docs are
   updated. `review-exhausted`/`review-stalled` or any unbuilt in-scope item → keep going / surface to the
