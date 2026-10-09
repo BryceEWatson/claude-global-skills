@@ -11,6 +11,10 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Changed
 
+- **`email-editorial-pass` scopes the no-greeting rule to status updates.** A client or personal email
+  may start with a name greeting the way Bryce writes them ("Hi Caden,"), then the point; a status
+  update (Slack, team or release coordination) still has none. Bryce chose this on 9 Oct 2026.
+
 - **`ship-it` and `review-loop` size validation to the change.** Both carry the same
   proportionate-validation rule: the highest-value 20% first, verified in one run, with hooks, audits,
   gates and dashboards added only after a measured shortfall; extra validation is a cost to justify,
