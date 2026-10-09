@@ -30,8 +30,8 @@ The **outbound habits** in step 3 are the one part this skill owns. They're Bryc
    **Outbound habits** (owned here; check all four on every draft, and only the project one on a pack):
    - **[MUST FIX] Open with the thing.** The first line is the point or the ask. No name greeting ("Hi Sam,"), and no courtesy opener or throat-clear ahead of the point.
    - **[MUST FIX] Never "waiting on Bryce".** Say what happens next instead.
-   - **[MUST FIX] The work belongs to the project.** Name the project it's part of. Never frame it as done "for" a person.
-   - **[MUST FIX] An invoice states what's billed, nothing else.** In an invoice, or the email that carries one: the billed items and amounts. No recap of the work, no pitch, no commentary.
+   - **[MUST FIX] The work belongs to the project.** Requirements, fixes and issues are the project's. Never frame them as done "for" a person.
+   - **[MUST FIX] An invoice states what's billed, nothing else.** No questions and no contract discussion or negotiation in an invoice or its cover email; those are conversations Bryce has with the client himself. Describing the billed work is fine. Link anything you reference, or leave it out.
 
    **Voice** (the fallback subset of the voice profile):
    - **[MUST FIX] Em dashes.** No `—`, no `–` (en dash), no ` -- `. **Check the subject line too.** Recast keeping the scope-and-qualify move: a colon, a parenthetical, or a second sentence. Do not just delete the dash.
