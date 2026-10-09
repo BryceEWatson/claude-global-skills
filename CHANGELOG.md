@@ -11,6 +11,18 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Changed
 
+- **`ship-it` and `review-loop` size validation to the change.** Both carry the same
+  proportionate-validation rule: the highest-value 20% first, verified in one run, with hooks, audits,
+  gates and dashboards added only after a measured shortfall; extra validation is a cost to justify,
+  with tests picked by their link to the change, full CI on the PR head after the publish wall's push
+  and again after each fix that reaches the PR, and no testable build held for CI; rigor scales with
+  users, blast radius and reversibility, while hard walls never relax; and it trims mechanism, never
+  scope. `ship-it` Step 7 adds it beside the five validation rules and
+  says each of them, and the Step 9 review, applies in proportion to blast radius. `review-loop` gains
+  "How much review to run", which says the same of its lens set, falsifier stage, iteration loop and
+  cost ceiling, names the walls that hold however small the change, and says an automatic run doesn't
+  size itself: the Stop hook passes no `--max-iter` or ceiling, so it keeps the defaults (3 rounds,
+  300,000 tokens). No existing rule is removed.
 - **`email-editorial-pass` carries Bryce's outbound habits as checks in the pass.** Step 1 now asks
   whether the words were asked for: an email or note from Bryce to a person defaults to a context
   pack (everything he needs while he writes it himself, with no wording and no subject line), and the
