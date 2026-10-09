@@ -7,7 +7,7 @@ user-invocable: true
 
 # Outbound email editorial pass
 
-Every external email Bryce sends represents him the same way a published post does, so it clears the **same voice bar** as brycewatson.com content. Run this pass on the draft **before** creating the Gmail draft. No outbound email skips it — even one-liners (the pass is fast). Sending stays Bryce's action; this governs what gets prepared, what the draft says and how it's shown to him.
+Every external email Bryce sends represents him the same way a published post does, so it clears the **same voice bar** as brycewatson.com content. Step 1 decides first whether a draft is wanted at all; when it is, the rest of the pass runs on it **before** the Gmail draft is created. No outbound email skips it, even a one-liner (the pass is fast). Sending stays Bryce's action; this governs what gets prepared, what the draft says and how it's shown to him.
 
 ## Source of truth (read it; do not fork the rules)
 
@@ -21,11 +21,13 @@ The **outbound habits** in step 3 are the one part this skill owns. They're Bryc
 
 ## The pass
 
-1. **Check the words were asked for, then draft.** An email or note from Bryce to a person (a client, a lead, a contact) defaults to a **context pack**, not a draft: everything Bryce needs to know while he writes it himself (who it's to, where the thread stands, the point to land, the facts and links he'll want), with no wording and no subject line. Write the words only when he asks for them ("draft a reply to Sam"). A pack carries none of his voice, so the voice and opening checks don't apply to it, but the project framing in step 3 does; show it the way step 6 shows a draft. A PR or issue body, or a status update a session posts as part of its own work, isn't a message he'd write himself, so this step doesn't hold it back. When the words were asked for, **draft** the email normally.
+1. **Decide: context pack or draft.** An email or note from Bryce to a person (a client, a lead, a contact) defaults to a **context pack**, not a draft: everything Bryce needs to know while he writes it himself (who it's to, where the thread stands, the point to land, the facts and links he'll want), with no wording and no subject line. Write the words only when he asks for them ("draft a reply to Sam"). A PR or issue body, or a status update a session posts as part of its own work, isn't a message he'd write himself, so it takes the draft path.
+   - **Context pack:** skip steps 2, 4 and 5. A pack carries none of his voice, so of the step 3 checks only "The work belongs to the project" applies; fix what it flags in the pack, then go straight to step 6. No draft is created on this path.
+   - **Draft** (he asked for the words, or it's a PR, issue or status body): **draft** it normally and carry on through steps 2 to 6.
 2. **Read** the voice-profile. Apply the hard rules + register to email. Do **not** force blog-only rules (keyword/SEO titles, the essayist "professional moves", one-quotable-line-per-post) onto a short email.
 3. **Review** the draft and flag every hit. For a substantial / high-stakes email, dispatch the brycewatson.com `editorial-reviewer` lens as a subagent for an independent pass; for a short reply, apply the checklist inline (that is the lens). The reviewer lens covers voice only, so check the outbound habits yourself either way.
 
-   **Outbound habits** (owned here; check every time):
+   **Outbound habits** (owned here; check all four on every draft, and only the project one on a pack):
    - **[MUST FIX] Open with the thing.** The first line is the point or the ask. No name greeting ("Hi Sam,"), and no courtesy opener or throat-clear ahead of the point.
    - **[MUST FIX] Never "waiting on Bryce".** Say what happens next instead.
    - **[MUST FIX] The work belongs to the project.** Name the project it's part of. Never frame it as done "for" a person.
@@ -37,8 +39,10 @@ The **outbound habits** in step 3 are the one part this skill owns. They're Bryc
    - **[MUST FIX] De-personalized / passive register.** First person, active voice, contractions are mandatory. No report-prose, no passive nominalizations ("Analysis revealed…").
    - **[SHOULD FIX] Plain-text artifacts.** Drop `*emphasis*` asterisks and other markdown that renders literally in a plain-text email.
 4. **Revise** — apply every MUST FIX and the worthwhile SHOULD FIX.
-5. **Create the draft** only after the pass is clean. **Email stays a draft:** never send it; the send is Bryce's. **Avoid bare URLs in the body** — Gmail auto-links them into a `google.com/url?...` redirect wrapper that can bake into the saved draft as literal text. Write a domain as plain text with no scheme, or add the link inside Gmail's compose. See [[verify-rendered-output-before-claiming]].
-6. **Report** to Bryce. **Show the draft as its link first, then the text:** the issue that tracks it or its Gmail thread, then the draft as it reads, then one line on what the pass changed (e.g. "removed 2 em dashes, cut one hype word, dropped markdown asterisks"). If you assert the draft was created, you actually called create_draft — verify, don't claim.
+5. **Create the draft** (draft path only) after the pass is clean. **Email stays a draft:** never send it; the send is Bryce's. **Avoid bare URLs in the body:** Gmail auto-links them into a `google.com/url?...` redirect wrapper that can bake into the saved draft as literal text. Write a domain as plain text with no scheme, or add the link inside Gmail's compose. See [[verify-rendered-output-before-claiming]].
+6. **Report** to Bryce. **Link first when there is one:** the issue that tracks it or its Gmail thread. New outreach may have neither; then leave the link out rather than invent one.
+   - **For a draft:** then the draft as it reads, then one line on what the pass changed (e.g. "removed 2 em dashes, cut one hype word, dropped markdown asterisks"). If you say the draft was created, you actually called create_draft; verify, don't claim.
+   - **For a context pack:** then the pack, and say plainly that no draft was created.
 
 ## Notes
 
