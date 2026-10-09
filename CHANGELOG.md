@@ -11,6 +11,18 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Changed
 
+- **`email-editorial-pass` carries Bryce's outbound habits as checks in the pass.** Step 1 now asks
+  whether the words were asked for: an email or note from Bryce to a person defaults to a context
+  pack (everything he needs while he writes it himself, with no wording and no subject line), and the
+  session drafts only when he asks. Step 3 gains an "Outbound habits" group, checked every time and
+  separate from the voice lens: open with the thing (no name greeting), never "waiting on Bryce",
+  the work belongs to the project and is never done "for" a person, and an invoice states what's
+  billed and nothing else. Step 5 says email stays a draft, and step 6 shows a draft as its issue or
+  thread link first, then the text. The old "Front-load" check, which allowed a courtesy opener like
+  "Thanks for reaching out", is folded into "Open with the thing" and no longer allows one. The voice
+  rules are still owned by brycewatson.com's voice profile; the habits live in the skill because
+  they're about what gets prepared and how it's framed, not about how the prose sounds. They were
+  written for the global `~/.claude/CLAUDE.md`, which had no room left.
 - **`weekly-work-log`: a `post: draft` answer now opens a GitHub issue instead of a board item.**
   The board this step wrote to was retired on 6 October 2026, so the Sunday run's call to
   `board.mjs add` would have left an approved post in a queue nothing reads any more, and would fail
