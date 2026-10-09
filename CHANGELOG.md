@@ -11,6 +11,16 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Changed
 
+- **`ship-it` and `review-loop` size validation to the change.** Both carry the same
+  proportionate-validation rule: the highest-value 20% first, verified in one run, with hooks, audits,
+  gates and dashboards added only after a measured shortfall; extra validation is a cost to justify,
+  with tests picked by their link to the change, full CI on the final candidate, and no testable build
+  held for CI; rigor scales with users, blast radius and reversibility, while hard walls never relax;
+  and it trims mechanism, never scope. `ship-it` Step 7 adds it beside the five validation rules and
+  says each of them, and the Step 9 review, applies in proportion to blast radius. `review-loop` gains
+  "How much review to run", which says the same of its lens set, falsifier stage, iteration loop and
+  cost ceiling, names the walls that hold however small the change, and leaves an automatic run's
+  arguments as the Stop hook passed them. No existing rule is removed.
 - **`weekly-work-log`: a `post: draft` answer now opens a GitHub issue instead of a board item.**
   The board this step wrote to was retired on 6 October 2026, so the Sunday run's call to
   `board.mjs add` would have left an approved post in a queue nothing reads any more, and would fail

@@ -117,7 +117,20 @@ Two required layers.
   if one is present in this project, else drive the running UI / preview directly*); for a CLI/server, run it
   and observe real behavior. The native `run`/`verify` commands are portable fallbacks.
 
-Design the validation before you trust it:
+Size the validation before you design it (proportionate validation):
+- **Highest-value 20% first.** Build the one change that gets most of the outcome, and verify it in one
+  run. Add hooks, audits, gates or dashboards only after a measured shortfall.
+- **Extra validation is a cost you justify.** Pick tests by their link to the change. Run full CI on the
+  final candidate. Never hold a testable build for CI: exercise the real app on it while CI runs.
+- **Rigor scales with users, blast radius and reversibility.** Every rule in this step, and the review in
+  Step 9, applies in proportion to blast radius. A reversible change few people use meets each rule with
+  a short pass over the paths it changed. A change many people depend on, or one that's hard to undo,
+  gets each rule at full depth. No rule is dropped, only sized. Hard walls never relax: the gates marked
+  HARD in this skill, and every safety or authority gate, hold at full strength however small the change.
+- **This trims mechanism, never scope** (Build-Complete, Core Directive 2 of the global instructions).
+  Proportion decides how much checking and machinery a change gets, never which in-scope items get built.
+
+Design the validation before you trust it (each rule applies in proportion, as above):
 - **Test composed behavior, not just components in isolation.** Exercise the whole path with every part
   active at once (for example, the full WHERE clause with all filters on, not each condition separately).
 - **One failure path for every success path.** Ask "what happens when the retry fails?", not just "does
@@ -171,7 +184,7 @@ before acting. A multi-hour build hands off rather than dying half-done.
 - **Publish wall (Step 8, HARD):** confirm fresh-branch-off-default + target/title/body before any push or PR.
 - **Definition-of-done (Step 9):** `review-clean` + commit-pinned PR comment + every in-scope item done+tested + docs updated. Treat `exhausted`/`stalled` as unresolved, not done.
 - **Portability:** name only the GLOBAL `/review-loop`, native plan mode/`ExitPlanMode`/`Agent`/`AskUserQuestion`, `session-end`. Discover/describe everything else generically.
-- **Match rigor to size:** a one-file fix needn't fan out 5 agents or run two full loops — scale the ceremony to the change. Concurrent builds in one repo collide on `/review-loop`'s per-repo lock; use a worktree per session.
+- **Match rigor to size:** a one-file fix needn't fan out 5 agents or run two full loops — scale the ceremony to the change, by its users, blast radius and reversibility (Step 7). Hard walls never relax. Concurrent builds in one repo collide on `/review-loop`'s per-repo lock; use a worktree per session.
 
 ## Complements (not duplicates)
 
