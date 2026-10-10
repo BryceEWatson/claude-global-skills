@@ -168,9 +168,11 @@ fallback shape, and you should expect to justify it in review.
 Several skills mine the user's **private local Claude chat history**
 (`chat-history-search`, `transcript-analysis`, `pattern-retrospective`,
 `global-review-loop`). Any skill that reads that corpus is held to a hard
-privacy contract. Today only `global-review-loop` meets rules 1 and 2; the other
-three don't yet, and [`SECURITY.md`](SECURITY.md#data-handling) says where each
-one writes.
+privacy contract. Today only `global-review-loop` comes close: its scripts that
+take an output path use the rule 1 guard and its instructions point them at its
+own `.local-state/`, while its proposals ledger writes to a fixed file there
+through a separate check of its own. The other three don't follow rules 1 and 2
+yet, and [`SECURITY.md`](SECURITY.md#data-handling) says where each one writes.
 
 1. **Route every corpus/derived write through the fail-closed guard.** Use
    `global-review-loop/lib/_guards.py::assert_safe_out()` for any output path.

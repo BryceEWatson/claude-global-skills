@@ -86,8 +86,9 @@ chat history**, and they don't all handle what they write the same way:
   take an output path check it with a fail-closed guard that refuses to write
   into your `~/.claude` config or into any git working tree. Its own git-ignored
   `.local-state/` folder is the one exception (the guard only warns if that folder
-  sits inside a git working tree), and its proposals ledger is written to a fixed
-  file in that folder.
+  sits inside a git working tree). Its proposals ledger is written to a fixed
+  file in that folder by a separate check, which refuses outright if the folder
+  sits inside a git working tree.
 - **`pattern-retrospective`** has no guard. Its instructions put studies and
   extracted data under `research/studies/` in the current project, its
   finding-registry scripts write to `reports/_data/` there, and its coder script

@@ -40,7 +40,9 @@ guard today, so check where each one writes before you run it.
   that take an output path (`scripts/corpus_retrieve.py`, `scripts/materialize.py`,
   `lib/claimpack.py`) call it, and they're the only code in this repo that does.
   The proposals ledger (`lib/ledger_store.py`) doesn't take a path; it writes to a
-  fixed file in the skill's own `.local-state/`. The guard **refuses** to write:
+  fixed file in the skill's own `.local-state/`, through a separate check that
+  refuses if that file would sit inside a git working tree. The guard **refuses**
+  to write:
   - **anywhere inside the `~/.claude` config tree** (your `CLAUDE.md`,
     `settings.json`, `skills/`, memories). The **only** exception is this skill's
     own `~/.claude/skills/global-review-loop/.local-state/` scratch folder;
@@ -74,9 +76,10 @@ guard today, so check where each one writes before you run it.
   through `assert_safe_out()` and keep the output under that skill's
   `.local-state/`.
 
-If you find any path by which mined history escapes `.local-state/` — into a
-tracked file, into `~/.claude` config, or into terminal/log output that gets
-captured — treat it as a vulnerability and report it privately.
+If you find a path by which mined history reaches a tracked file, your
+`~/.claude` config, or terminal or log output that gets captured, and the list
+above doesn't already describe it, treat it as a vulnerability and report it
+privately.
 
 ## Secret scanning
 
