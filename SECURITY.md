@@ -63,7 +63,12 @@ guard today, so check where each one writes before you run it.
   working tree. The others can too.
 - **`transcript-analysis` is instructions only, with no guard.** Its `SKILL.md`
   tells the session to write the report to `research/studies/` in the current
-  project, or to the project root if that folder doesn't exist.
+  project, or to the project root if that folder doesn't exist. It also keeps a
+  findings ledger, which records quotes from your sessions, at
+  `.claude/transcript-analysis/findings-ledger.json` in the project, and its
+  intermediate files (`data/session-inventory.json`,
+  `data/transcript-extracts.json`, `data/user-messages.json`) hold session
+  details and extracted transcript text until you delete them.
 - **`chat-history-search` is instructions only, with no guard.** Its example
   commands keep lists of matching log files in `/tmp`, and it reports what it
   finds in the session rather than in a report file.

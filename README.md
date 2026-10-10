@@ -95,7 +95,10 @@ chat history**, and they don't all handle what they write the same way:
   writes wherever you point `--output`, so its output can land in a tracked tree.
 - **`transcript-analysis`** is instructions only. It tells the session to write its
   report to `research/studies/` in the current project, or to the project root if
-  that folder doesn't exist, so the report can land in a tracked tree.
+  that folder doesn't exist. It also keeps a findings ledger with quotes from your
+  sessions at `.claude/transcript-analysis/findings-ledger.json` in the project,
+  and may leave extracted transcript text under `data/`. Any of these can land in
+  a tracked tree.
 - **`chat-history-search`** is instructions only. Its example commands keep lists
   of matching log files in `/tmp`, and it reports what it finds in the session
   rather than in a report file.
