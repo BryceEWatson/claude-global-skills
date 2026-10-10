@@ -92,7 +92,7 @@ chat history**, and they don't all handle what they write the same way:
 - **`pattern-retrospective`** has no guard. Its instructions put studies and
   extracted data under `research/studies/` in the current project, its
   finding-registry scripts write to `reports/_data/` there, and its coder script
-  writes wherever you point `--output`.
+  writes wherever you point `--output`, so its output can land in a tracked tree.
 - **`transcript-analysis`** is instructions only. It tells the session to write its
   report to `research/studies/` in the current project, or to the project root if
   that folder doesn't exist, so the report can land in a tracked tree.

@@ -125,7 +125,7 @@ Several skills (`chat-history-search`, `transcript-analysis`,
 `pattern-retrospective`, `global-review-loop`) mine the user's **private local
 Claude chat history**. Only `global-review-loop` sends its writes through the
 fail-closed guard (`global-review-loop/lib/_guards.py::assert_safe_out()`); the
-other three write to project folders or wherever you point them.
+other three write to project folders, `/tmp` or wherever you point them.
 [`SECURITY.md`](SECURITY.md#data-handling) lists where each one writes.
 
 - **Never commit anything under any `.local-state/`.** It's already covered by

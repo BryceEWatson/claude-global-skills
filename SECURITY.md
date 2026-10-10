@@ -57,8 +57,10 @@ guard today, so check where each one writes before you run it.
   extracted data under `research/studies/` in the current project. Its
   finding-registry scripts (`lib/register_finding.py`,
   `lib/recover_from_backup.py`) write to `reports/_data/` there, and
-  `lib/dual_llm_coder.py` writes wherever `--output` points. Any of these can sit
-  inside a tracked git tree.
+  `lib/dual_llm_coder.py` writes wherever `--output` points. Unless you pass
+  `--project-root`, `register_finding.py` uses the current folder or the nearest
+  one above it that has a `.git` entry, so by default it writes inside a git
+  working tree. The others can too.
 - **`transcript-analysis` is instructions only, with no guard.** Its `SKILL.md`
   tells the session to write the report to `research/studies/` in the current
   project, or to the project root if that folder doesn't exist.
