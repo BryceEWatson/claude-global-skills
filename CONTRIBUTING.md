@@ -123,9 +123,11 @@ Notes:
 
 Several skills (`chat-history-search`, `transcript-analysis`,
 `pattern-retrospective`, `global-review-loop`) mine the user's **private local
-Claude chat history**. Mined output is written only under each skill's
-git-ignored `.local-state/`, behind a fail-closed guard
-(`global-review-loop/lib/_guards.py::assert_safe_out()`).
+Claude chat history**. Only `global-review-loop` uses the fail-closed guard
+(`global-review-loop/lib/_guards.py::assert_safe_out()`), for its scripts that
+take an output path; its proposals ledger goes through a separate check of its
+own. The other three write to project folders, `/tmp` or wherever you point them.
+[`SECURITY.md`](SECURITY.md#data-handling) lists where each one writes.
 
 - **Never commit anything under any `.local-state/`.** It's already covered by
   `.gitignore` (`**/.local-state/`); don't `git add -f` around it.
