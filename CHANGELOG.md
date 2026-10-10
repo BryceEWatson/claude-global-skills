@@ -11,6 +11,11 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Changed
 
+- **`email-editorial-pass` scopes the no-greeting rule to status updates.** Any email that isn't a
+  status update (to a client, lead, contact or friend) may start with a name greeting the way Bryce
+  writes them ("Hi Caden,"), then the point; a status update (Slack, team or release coordination)
+  still has none. Bryce chose this on 9 Oct 2026.
+
 - **The privacy docs now say what each history-reading skill actually writes.** The README,
   `SECURITY.md`, `CONTRIBUTING.md` and `SKILL-SPEC.md` said all four history-reading skills write only
   under a git-ignored `.local-state/` behind a fail-closed guard. Only `global-review-loop` uses that
