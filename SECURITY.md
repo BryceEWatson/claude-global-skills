@@ -32,32 +32,61 @@ contain no real private data.
 
 Several skills (`chat-history-search`, `transcript-analysis`,
 `pattern-retrospective`, `global-review-loop`) **mine your private local Claude
-history** — your past prompts and conversations. How that data is contained:
+history**: your past prompts and conversations. Only one of them has a write
+guard today, so check where each one writes before you run it.
 
-- **Mined data stays under each skill's `.local-state/`**, which is **git-ignored**
-  (`.gitignore` covers `**/.local-state/`). It is local scratch, never tracked
-  content, and is never copied between the repo and the live tree —
-  `scripts/sync.py` excludes `.local-state/` in both `--capture` and `--deploy`.
-- **Writes are gated by a fail-closed guard.** `global-review-loop/lib/_guards.py`
-  exposes `assert_safe_out()`, which validates every output destination before a
-  write. It **refuses** to write:
+- **`global-review-loop` checks its output paths with a fail-closed guard.**
+  `global-review-loop/lib/_guards.py` exposes `assert_safe_out()`. The scripts
+  that take an output path (`scripts/corpus_retrieve.py`, `scripts/materialize.py`,
+  `lib/claimpack.py`) call it, and they're the only code in this repo that does.
+  The proposals ledger (`lib/ledger_store.py`) doesn't take a path; it writes to a
+  fixed file in the skill's own `.local-state/`, through a separate check that
+  refuses if that file would sit inside a git working tree. The guard **refuses**
+  to write:
   - **anywhere inside the `~/.claude` config tree** (your `CLAUDE.md`,
-    `settings.json`, `skills/`, memories) — the **only** sanctioned exception is
-    this skill's own `~/.claude/skills/global-review-loop/.local-state/` scratch;
+    `settings.json`, `skills/`, memories). The **only** exception is this skill's
+    own `~/.claude/skills/global-review-loop/.local-state/` scratch folder;
   - **anywhere inside a git working tree** (it walks up looking for a `.git`
-    entry), so mined private data cannot be committed by accident.
-  - The one exempt path — the skill's own `.local-state/` — still **warns** if an
-    ancestor is a git working tree, so the exemption is never a silent leak path.
+    entry), so mined private data can't be committed by accident.
+  - The one exempt path, the skill's own `.local-state/`, is exempt from the
+    git-tree refusal too. There the guard only **warns** if an ancestor is a git
+    working tree; it doesn't refuse.
   - On **any error** while evaluating safety, it **refuses** rather than
-    proceeding. A boundary check that cannot prove safety must not assume it.
+    proceeding. A boundary check that can't prove safety mustn't assume it.
+- **`pattern-retrospective` has no guard.** Its instructions put studies and
+  extracted data under `research/studies/` in the current project. Its
+  finding-registry scripts (`lib/register_finding.py`,
+  `lib/recover_from_backup.py`) write to `reports/_data/` there, and
+  `lib/dual_llm_coder.py` writes wherever `--output` points. Unless you pass
+  `--project-root`, `register_finding.py` uses the current folder or the nearest
+  one above it that has a `.git` entry, so by default it writes inside a git
+  working tree. The others can too.
+- **`transcript-analysis` is instructions only, with no guard.** Its `SKILL.md`
+  tells the session to write the report to `research/studies/` in the current
+  project, or to the project root if that folder doesn't exist. It also keeps a
+  findings ledger, which records quotes from your sessions, at
+  `.claude/transcript-analysis/findings-ledger.json` in the project, and its
+  intermediate files (`data/session-inventory.json`,
+  `data/transcript-extracts.json`, `data/user-messages.json`) hold session
+  details and extracted transcript text until you delete them.
+- **`chat-history-search` is instructions only, with no guard.** Its example
+  commands keep lists of matching log files in `/tmp`, and it reports what it
+  finds in the session rather than in a report file.
+- **`.local-state/` is git-ignored** (`.gitignore` covers `**/.local-state/`) and
+  is never copied between the repo and the live tree: `scripts/sync.py` excludes
+  `.local-state/` in both `--capture` and `--deploy`. That protects whatever a
+  skill puts there; it doesn't stop a skill from writing somewhere else.
 - **Net rule:** mined data must never reach a **tracked git tree** or the
-  **`~/.claude` config**. If you write a new skill that touches private history,
-  route every write through `assert_safe_out()` and keep the output under that
-  skill's `.local-state/`.
+  **`~/.claude` config**. Before you run a skill that reads your history, check
+  the output paths it will use and move or ignore anything that lands in a
+  repo. If you write a new skill that touches private history, route every write
+  through `assert_safe_out()` and keep the output under that skill's
+  `.local-state/`.
 
-If you find any path by which mined history escapes `.local-state/` — into a
-tracked file, into `~/.claude` config, or into terminal/log output that gets
-captured — treat it as a vulnerability and report it privately.
+If you find a path by which mined history reaches a tracked file, your
+`~/.claude` config, or terminal or log output that gets captured, and the list
+above doesn't already describe it, treat it as a vulnerability and report it
+privately.
 
 ## Secret scanning
 

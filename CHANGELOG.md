@@ -11,10 +11,22 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Changed
 
-- **`email-editorial-pass` scopes the no-greeting rule to status updates.** A client or personal email
-  may start with a name greeting the way Bryce writes them ("Hi Caden,"), then the point; a status
-  update (Slack, team or release coordination) still has none. Bryce chose this on 9 Oct 2026.
+- **`email-editorial-pass` scopes the no-greeting rule to status updates.** Any email that isn't a
+  status update (to a client, lead, contact or friend) may start with a name greeting the way Bryce
+  writes them ("Hi Caden,"), then the point; a status update (Slack, team or release coordination)
+  still has none. Bryce chose this on 9 Oct 2026.
 
+- **The privacy docs now say what each history-reading skill actually writes.** The README,
+  `SECURITY.md`, `CONTRIBUTING.md` and `SKILL-SPEC.md` said all four history-reading skills write only
+  under a git-ignored `.local-state/` behind a fail-closed guard. Only `global-review-loop` uses that
+  guard; `pattern-retrospective` writes to `research/studies/` and `reports/_data/` in the current
+  project, `transcript-analysis` tells the session to write its report to `research/studies/` or the
+  project root and its findings ledger to `.claude/transcript-analysis/` in the project, and
+  `chat-history-search` keeps scratch lists in `/tmp`. The docs now say so and ask you to check output
+  paths before running. No skill code changed.
+- **README: a "What this shows" section, no em dashes in the intro, and three more skills listed.**
+  `session-portal` and `ship-it` join the core table and `email-editorial-pass` joins the personal
+  examples.
 - **`ship-it` and `review-loop` size validation to the change.** Both carry the same
   proportionate-validation rule: the highest-value 20% first, verified in one run, with hooks, audits,
   gates and dashboards added only after a measured shortfall; extra validation is a cost to justify,
