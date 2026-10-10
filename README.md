@@ -1,18 +1,27 @@
 # claude-global-skills
 
-A curated collection of [Claude Code](https://claude.com/claude-code) **skills** —
+A curated collection of [Claude Code](https://claude.com/claude-code) **skills**:
 a multi-agent code-review loop, exhaustive local chat-history search, an
 evidence-grounded session end/resume pair, Gemini image generation, and rigorous
-transcript retrospectives — that run **machine-wide with nothing but `python` and
-`node`**. No per-project install: drop a skill into `~/.claude/skills/` and invoke
-it as a slash command in any session.
+transcript retrospectives. They run **machine-wide with nothing but `python` and
+`node`**. There's no per-project install: drop a skill into `~/.claude/skills/` and
+invoke it as a slash command in any session.
 
 These are global skills, version-controlled here so they can be reviewed, shared,
 and deployed to a fresh machine. **The repo is the source of truth**; each live copy
 is a deployed (materialized) copy. Most skills target **Claude Code**
-(`~/.claude/skills/`); a skill can also declare **Codex** (`~/.codex/skills/`) as a
-target and deploy to both from one shared source — see
+(`~/.claude/skills/`). A skill can also declare **Codex** (`~/.codex/skills/`) as a
+target and deploy to both from one shared source; see
 [Cross-runtime targets](#cross-runtime-targets-claude-code--codex).
+
+## What this shows
+
+These are the checks I run on my own software before anyone relies on it:
+
+- A code review that tries to prove each problem it finds wrong before reporting it, runs the project's own tests and build, and, when there's a pull request, records its verdict on the exact version it checked.
+- Work notes where every important claim says how I checked it, or says plainly that I didn't.
+
+I bring the same habits to client work through [Watson Standard](https://watsonstandardco.com), where I build, fix and harden software before real users rely on it.
 
 ## Quickstart
 
@@ -46,6 +55,8 @@ after copying. See each skill's section below.
 | [`session-end`](session-end/) | Close out a session into an evidence-grounded record (decisions, claims + verification, assumptions, artifacts, reversals); mid-flight, also emits a ready-to-paste continuation prompt that carries its own reconcile rules. Closes light, with no handoff file, when everything already sits in PRs. |
 | [`monitor-agent-thread`](monitor-agent-thread/) | Watch a live or recent Claude Code **or** Codex session from the other product via local session logs, with a safe projection that never exposes hidden reasoning, raw tool arguments, signatures, encrypted content, or secrets. The first **dual-target** skill (Claude + Codex). |
 | [`fable-seat`](fable-seat/) | Operating profile for a session running on Fable (`claude-fable-5`): default effort `high` and step DOWN for routine work rather than reaching for `xhigh`, lead task framing with the outcome, keep the prompt cache warm by farming cheap work to a subagent instead of inline-switching the main model, and budget + compact long runs. A genuine no-op on Opus and every non-Fable model; Fable-mechanics guidance, not a superiority claim. |
+| [`session-portal`](session-portal/) | Pass a short message from a Claude Code session to a Codex session, or back, through a local SQLite queue behind an authenticated MCP server. The recipient picks it up at a safe point and acts under its own permissions; nothing is pushed into a running session. Dual-target (Claude + Codex). |
+| [`ship-it`](ship-it/) | Take a build task from first read to a reviewed pull request: research, a plan that gets reviewed before any code, implementation, tests against the real app, then a review of the PR, looping each step until it's done. Leans on `review-loop`. |
 
 ### Personal examples — wired to the author's setup; adapt before use
 
@@ -60,6 +71,7 @@ domains, and assumptions to yours.
 | [`global-review-loop`](global-review-loop/) | Mine your whole fleet's history for friction that recurs across projects, then propose global `~/.claude` changes — reconciled against what already ships and self-validated by an adversarial claim loop. (Wired to a project registry; see its SKILL.md.) |
 | [`chat-arch-thrash-detect`](chat-arch-thrash-detect/) | A `PostToolUse` hook that nudges when a session falls into edit-thrash / read-loop / test-loop / tool-flail spirals. Hook host (not slash-invoked); ships its installer. |
 | [`weekly-work-log`](weekly-work-log/) | Build a public weekly work-log page from session-end handoffs + git, with every number re-verified. Wired to the author's site as a worked example. |
+| [`email-editorial-pass`](email-editorial-pass/) | An editorial pass that runs before an outbound email draft is created: no em dashes, no hype, first person, the point up front. Wired to the author's published voice profile as a worked example. |
 
 > `session-handoff` is a thin alias that routes to `session-end` (the skill was
 > renamed); `/session-handoff` still works if it's installed.
@@ -68,12 +80,29 @@ domains, and assumptions to yours.
 
 Several skills (`chat-history-search`, `transcript-analysis`,
 `pattern-retrospective`, `global-review-loop`) read your **private local Claude
-chat history**. That data is written only under each skill's git-ignored
-`.local-state/`, behind a fail-closed guard that refuses to write into your
-`~/.claude` config or any git working tree — so mined data can't land in a tracked
-or published tree. Skills also run as executable code (some install hooks), so a
-skill is a code-execution surface. **Read [`SECURITY.md`](SECURITY.md) before
-installing or contributing**, and review a skill's code before you deploy it.
+chat history**, and they don't all handle what they write the same way:
+
+- **`global-review-loop`** is the only one with a write guard. Its scripts that
+  take an output path check it with a fail-closed guard that refuses to write
+  into your `~/.claude` config or into any git working tree. Its own git-ignored
+  `.local-state/` folder is the one exception (the guard only warns if that folder
+  sits inside a git working tree), and its proposals ledger is written to a fixed
+  file in that folder.
+- **`pattern-retrospective`** has no guard. Its instructions put studies and
+  extracted data under `research/studies/` in the current project, its
+  finding-registry scripts write to `reports/_data/` there, and its coder script
+  writes wherever you point `--output`.
+- **`transcript-analysis`** is instructions only. It tells the session to write its
+  report to `research/studies/` in the current project, or to the project root if
+  that folder doesn't exist, so the report can land in a tracked tree.
+- **`chat-history-search`** is instructions only. Its example commands keep lists
+  of matching log files in `/tmp`, and it reports what it finds in the session
+  rather than in a report file.
+
+Check where a skill will write before you run it, and keep mined output out of
+anything you commit or publish. Skills also run as executable code (some install
+hooks), so a skill is a code-execution surface. **Read [`SECURITY.md`](SECURITY.md)
+before installing or contributing**, and review a skill's code before you deploy it.
 
 ## How this repo is maintained
 
