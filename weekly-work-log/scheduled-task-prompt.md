@@ -183,7 +183,10 @@ JavaScript, Python, or shell string: the 16 August run lost every apostrophe tha
   own thread", "keeping it generic here", "belongs in an honest log", or "not
   public-facing". **Accuracy is the hard floor even here.** NO `primaryCommit`, NO `repo`,
   NO `snippets.verify` — these repos are NEVER git-read. Use the session `date`. Never name
-  the client, niche, people, product, accounts, amounts, or codenames.
+  the niche, people, accounts, amounts, or codenames. **Akaya may be named** (Bryce,
+  2026-10-20: "we don't have to hide Akaya", "Akaya is worth sharing"): say "Akaya" or
+  "Akaya's upload flow", never "the client's app" or "a client project" (the build rejects
+  that case-study phrasing). Its rows still publish only once vetted in step 3b.
 - **Work outside the allowlisted repos never appears.** Neither digest holds a session from
   an unknown folder, the Watson Standard hub, its client or Open Hours folders, or client
   code, so there is nothing to curate from them. Apart from the display-role rows above,
@@ -244,6 +247,33 @@ Then GATE your own drafting before anything builds:
   persist `BUILD_FAILED` and STOP with NO PR.
 - Do NOT pass `--week` (no backfill from the cron). Do NOT hand-edit `work-log.json`,
   `reports/*`, or `goals.json` — only the build writes them.
+
+## 3b. Vet this week's Akaya rows (before step 4)
+Akaya's session counts are public, but an Akaya row reaches the site only once it has a
+verdict in `src/data/akaya-work-log.json`; a row with none stays off every page. The rules
+are in `docs/client-work-log.md`. Read them in full before vetting, every run. A row may say
+what kind of work Bryce did, never what was wrong inside the client's product or how it is run.
+- Run `node scripts/client-work-log-validate.mjs`. Its OK line lists every Akaya row with no
+  verdict yet. If it lists none, skip to step 4.
+- For each listed row, read its title and summary in `src/data/work-log.source.json` against
+  the rules and add one record under `items`, keyed by the row's `id`, with
+  `vettedOn: "<today YYYY-MM-DD>"` and a `reason`:
+  - `keep` when the wording already passes: copy its `title` and `summary` exactly.
+  - `reword` when it carries detail the rules bar (a defect, risk or failure inside the
+    product; access or security setup; infrastructure or vendors; meeting or document
+    contents; money; figures): write the public `title` and `summary` at release-notes
+    level. Never invent a fact or upgrade a status the original doesn't support.
+  - `drop` when the row is mostly that detail, or you aren't sure: no `title` or `summary`.
+    Hidden is the safe default. Never guess.
+  The `reason` names the kind of detail removed ("described a defect inside the product"),
+  never the detail itself.
+- If the week's Akaya project card has a new `frontier` sentence (compare the `Akaya` entry
+  in `source.json`'s `projects` with the `texts` list), add a `texts` entry with the exact
+  `original`, a `verdict`, `vettedOn`, and the `public` wording (equal to the original for
+  `keep`).
+- Re-run `node scripts/client-work-log-validate.mjs` and fix everything it rejects. If it
+  still fails, drop the rows it names rather than stopping the run.
+- Keep the list of verdicts (title as published, or "dropped" with the reason) for step 6.
 
 ## 4. Candidates for Bryce (never published by this run)
 Twelve-week LinkedIn test (approved 2026-09-10, on the condition the content is high
@@ -390,6 +420,9 @@ holds the merge.)
      call, never through `gh pr close --comment`. Confirm the old PR reads CLOSED.
   3. If the script reported no change, open nothing new and leave the old PR as it is: record
      success `NO_CHANGE` with the message "nothing new this week; PR <old> still open".
+- If step 3b vetted any Akaya rows, comment on the new PR, as its own call, with one line per
+  row: the verdict and the published title, or "dropped" and the reason. The script commits
+  `src/data/akaya-work-log.json` with the week's data, so the verdicts land with their rows.
 - If the script reports no change at all (no report data, candidates, ledger, or verdict log
   changed), record success `NO_CHANGE` and skip to step 8. A PR that carries only candidates or
   ledger changes is normal and goes through step 7 like any other.

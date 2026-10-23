@@ -11,6 +11,12 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Changed
 
+- **`weekly-work-log` vets each new Akaya row.** brycewatson.com now shows Akaya on its work log
+  (Bryce, 20 Oct 2026: "Akaya is worth sharing"), but a row publishes only once it has a verdict in
+  the site's `src/data/akaya-work-log.json`. The Sunday run gains step 3b: read each new Akaya row
+  against the site's rules, record keep, reword or drop, run the site's validator, and list the
+  verdicts on the PR. Rows may now name Akaya, and should, instead of "the client's app".
+
 - **`email-editorial-pass` scopes the no-greeting rule to status updates.** Any email that isn't a
   status update (to a client, lead, contact or friend) may start with a name greeting the way Bryce
   writes them ("Hi Caden,"), then the point; a status update (Slack, team or release coordination)
