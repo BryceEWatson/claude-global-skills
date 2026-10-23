@@ -423,6 +423,8 @@ holds the merge.)
 - If step 3b vetted any Akaya rows, comment on the new PR, as its own call, with one line per
   row: the verdict and the published title, or "dropped" and the reason. The script commits
   `src/data/akaya-work-log.json` with the week's data, so the verdicts land with their rows.
+  Your verdicts are a draft: step 7's merge gate always holds a PR that changes that file, so
+  Bryce reads the new Akaya wording before it publishes. That hold is expected, not a failure.
 - If the script reports no change at all (no report data, candidates, ledger, or verdict log
   changed), record success `NO_CHANGE` and skip to step 8. A PR that carries only candidates or
   ledger changes is normal and goes through step 7 like any other.
