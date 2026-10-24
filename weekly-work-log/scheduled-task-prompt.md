@@ -254,7 +254,9 @@ verdict in `src/data/akaya-work-log.json`; a row with none stays off every page.
 are in `docs/client-work-log.md`. Read them in full before vetting, every run. A row may say
 what kind of work Bryce did, never what was wrong inside the client's product or how it is run.
 - Run `node scripts/client-work-log-validate.mjs`. Its OK line lists every Akaya row with no
-  verdict yet. If it lists none, skip to step 4.
+  verdict yet. Skip to step 4 only when it lists none AND the Akaya project card's `frontier`
+  (the `Akaya` entry in `source.json`'s `projects`) already has an exact `original` match in
+  the vetting file's `texts`. Either one alone still needs vetting below.
 - For each listed row, read its title and summary in `src/data/work-log.source.json` against
   the rules and add one record under `items`, keyed by the row's `id`, with
   `vettedOn: "<today YYYY-MM-DD>"` and a `reason`:
