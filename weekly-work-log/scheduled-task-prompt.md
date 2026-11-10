@@ -139,7 +139,7 @@ For each digest session **not already represented** in `src/data/work-log.source
 
 **Write the batch as a JSON file, never as code.** Use the file-writing tool to write
 `scripts/.tmp/work-log-draft.json` (gitignored) as UTF-8 JSON:
-`{ "items": [...], "headline": "...", "headlineWeek": "<Monday>", "nextUp": "...", "nextUpWeek": "<Monday>" }`,
+`{ "items": [...], "headline": "...", "headlineWeek": "<Monday>", "nextUp": "...", "nextUpWeek": "<Monday>", "frontiers": [...] }`,
 then append it with `node scripts/work-log.mjs append scripts/.tmp/work-log-draft.json`. The
 append validates before it writes and refuses a damaged batch. Never put item prose inside a
 JavaScript, Python, or shell string: the 16 August run lost every apostrophe that way.
@@ -193,8 +193,15 @@ JavaScript, Python, or shell string: the 16 August run lost every apostrophe tha
   which stay under their own label, no row mentions a client's work or a free check, even in
   general terms: if a handoff or another project's session refers to one, leave that part out.
 - **Per-project goal lines:** for any project new to `source.json`, add a `projects[]` entry
-  with a durable `mission` (from the project's CHARTER/README, not one week) + a this-week
-  `frontier` (derived). Display-role projects get a generalized mission too.
+  with a durable `mission` (from the project's CHARTER/README, not one week). Display-role
+  projects get a generalized mission too.
+- **"During this week" lines, rewrite them every run:** every project with at least one item
+  this week gets a fresh `frontier`, one sentence derived from THIS week's items (same voice
+  and digit rules), stamped with this week's Monday. Put them in the draft as
+  `"frontiers": [{ "project": "<name>", "frontier": "...", "frontierWeek": "<Monday>" }]`.
+  Whatever is in `source.json` is the PREVIOUS run's line: the build drops a line not
+  stamped for this week, renders no line for that card, and the PR body flag holds the merge.
+  Akaya's new line also needs its `texts` entry in step 3b.
 
 **THE PAGE HEADLINE — rewrite it every run (`headline` + `headlineWeek`).** `source.headline`
 is the `<h1>`, the largest text on the page, and it is a CLAIM ABOUT THIS WEEK. It is authored,
