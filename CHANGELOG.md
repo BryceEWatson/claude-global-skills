@@ -11,6 +11,20 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
 
 ### Changed
 
+- **`review-loop`'s Stop hook stops asking for reviews nobody needs.** A study of 19 to 23 Nov 2026 found 44
+  review blocks in 17 sessions, 20 of them in two sessions. Four changes: (1) the hook remembers each
+  reviewable file's content instead of the whole tree's diff, so editing a note beside an already-reviewed
+  script no longer starts another review; (2) it lets the stop through when the session wrote none of the
+  reviewable files, which is the usual case for another session's uncommitted work in a shared checkout;
+  (3) after it dispatches a review it stays quiet for that session until the review reaches a verdict or an
+  hour passes, and it records the files as the review left them so the review's own fixes don't start a
+  second one; (4) its block message and the skill's new "closing reply" step tell the session to restate
+  the full main result first and the review outcome second. The authorship guard gains a `timingFiles`
+  signal (a file last modified while one of the session's shell commands ran), because sessions that edit
+  through scripts were being reported as `independent`; it also sees files inside a new untracked directory
+  and PowerShell writes. The independence verdict and the self-review marking are unchanged.
+  `REVIEW_LOOP_STATE_DIR` moves the hook's state and log for a test or a replay.
+
 - **`weekly-work-log` vets each new Akaya row.** brycewatson.com now shows Akaya on its work log
   (Bryce, 20 Oct 2026: "Akaya is worth sharing"), but a row publishes only once it has a verdict in
   the site's `src/data/akaya-work-log.json`. The Sunday run gains step 3b: read each new Akaya row
