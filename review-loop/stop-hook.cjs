@@ -57,8 +57,10 @@ const HOOK_LOG = path.join(STATE_ROOT, 'hook.log');
 const STALE_LOCK_MS = 30 * 60 * 1000; // 30 minutes
 // How long a dispatched review may run without a verdict before the hook stops
 // waiting for it. The longest hook-dispatched review measured over 19-23 Nov 2026
-// took 61 minutes from the block to its verdict.
-const REVIEW_STALE_MS = 60 * 60 * 1000;
+// took 61 minutes from the block to its verdict, so the window is 90.
+const REVIEW_STALE_MS = 90 * 60 * 1000;
+// Per-session run records older than this are deleted by the stale sweep.
+const RUN_RECORD_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // A reviewable file larger than this is identified by size and modification time
 // instead of content, so the hook never buffers a huge file just to compare it.
 const MAX_HASH_BYTES = 16 * 1024 * 1024;
@@ -145,6 +147,16 @@ function gitDiffChangedFiles(cwd) {
     });
     return out.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
   } catch (_) { return null; }
+}
+
+function gitAddedFiles(cwd) {
+  // Files that exist now but not in HEAD (staged additions and rename targets).
+  try {
+    const out = execFileSync('git', ['-C', cwd, 'diff', 'HEAD', '--name-only', '--diff-filter=A'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return out.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  } catch (_) { return []; }
 }
 
 function gitBranch(cwd) {
@@ -459,6 +471,13 @@ function sweepStaleLocks() {
     const entries = fs.readdirSync(STATE_ROOT, { withFileTypes: true });
     const now = Date.now();
     for (const e of entries) {
+      if (e.isFile() && e.name.endsWith('.hook-review.json')) {
+        try {
+          const p = path.join(STATE_ROOT, e.name);
+          if (now - fs.statSync(p).mtimeMs > RUN_RECORD_MAX_AGE_MS) fs.unlinkSync(p);
+        } catch (_) { /* skip this entry */ }
+        continue;
+      }
       if (!e.isFile() || !e.name.endsWith('.lock')) continue;
       const lockPath = path.join(STATE_ROOT, e.name);
       try {
@@ -538,6 +557,33 @@ function reviewEndedSince(sessionId, sinceMs, payload, tail, readPromise) {
   return null;
 }
 
+function reviewStarted(sessionId, run, tail) {
+  // A block is a request, not a review. Measured 19-23 Nov 2026: 23 of 44 blocks
+  // were not followed by one (the session declined in a sentence, or went on with
+  // other work). Staying quiet is only right once a review is really under way:
+  // the skill was invoked, a reviewer agent was dispatched, or the skill's own
+  // state or lock file exists. Remembered in the run record once seen, because the
+  // evidence can scroll out of the transcript tail.
+  if (run.started) return true;
+  for (const name of [`${sessionId}.json`, `${sessionId}.lock`]) {
+    try { if (fs.statSync(path.join(STATE_ROOT, name)).mtimeMs >= run.dispatched_at) return true; } catch (_) { /* absent */ }
+  }
+  for (const line of String(tail || '').split('\n')) {
+    if (!line.includes('"tool_use"')) continue;
+    let rec;
+    try { rec = JSON.parse(line); } catch (_) { continue; }
+    if (!rec || rec.type !== 'assistant' || !(Date.parse(rec.timestamp) >= run.dispatched_at)) continue;
+    const content = rec.message && rec.message.content;
+    if (!Array.isArray(content)) continue;
+    for (const b of content) {
+      if (!b || b.type !== 'tool_use') continue;
+      if (b.name === 'Agent' || b.name === 'Task') return true;
+      if (b.name === 'Skill' && /review-loop/.test(String((b.input && b.input.skill) || ''))) return true;
+    }
+  }
+  return false;
+}
+
 function reviewableNow(cwd) {
   // The changed files and their classification, or null when git cannot say.
   const changed = gitDiffChangedFiles(cwd);
@@ -569,6 +615,14 @@ function settleReview(sessionId, cwd, run, why) {
   logLine(`settled: session=${sessionId} review ended (${why}); the state it left is recorded as reviewed`);
 }
 
+function archiveTerminalState(sessionId) {
+  const p = path.join(STATE_ROOT, `${sessionId}.json`);
+  try {
+    const st = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (st && TERMINAL_COMPLETIONS.has(st.completion)) archiveAndExit(p);
+  } catch (_) { /* absent or corrupt: nothing to archive */ }
+}
+
 function emitAllowStop(reason) {
   if (reason) logLine(`allow: ${reason}`);
   process.exit(0);
@@ -592,8 +646,11 @@ function emitAllowStop(reason) {
  * that was running when the file was last modified). If none of the reviewable files
  * is among them, the work belongs to someone else and the hook lets the stop through.
  *
- * Returns { independence, authoredFiles, weakFiles, timingFiles } or null when it
- * could not be determined.
+ * `orphanedEdits` lists files the session wrote in the repo that are no longer there
+ * (moved or deleted); when it is not empty, new files count as possibly its own.
+ *
+ * Returns { independence, authoredFiles, weakFiles, timingFiles, orphanedEdits } or
+ * null when it could not be determined.
  */
 function checkAuthorship(sessionId, cwd) {
   const guard = path.join(os.homedir(), '.claude', 'skills', 'review-loop', 'authorship-guard.mjs');
@@ -608,6 +665,7 @@ function checkAuthorship(sessionId, cwd) {
       authoredFiles: parsed.authoredFiles || [],
       weakFiles: parsed.weakFiles || [],
       timingFiles: parsed.timingFiles || [],
+      orphanedEdits: parsed.orphanedEdits || [],
     };
   } catch (err) {
     // A guard that cannot run must not block the review; an unproven claim of
@@ -619,6 +677,7 @@ function checkAuthorship(sessionId, cwd) {
       authoredFiles: parsed.authoredFiles || [],
       weakFiles: parsed.weakFiles || [],
       timingFiles: parsed.timingFiles || [],
+      orphanedEdits: parsed.orphanedEdits || [],
     };
     } catch (_) { return null; }
   }
@@ -635,7 +694,7 @@ const CLOSING_REPLY_RULE = [
   'then give the review outcome. If the review had nothing to add, resend your previous reply',
   'with at most one added line about the review. Never end on a bare "Done", or on a reply that',
   'only says what the review fixed.',
-  'Later stops stay quiet until this review reaches a verdict, so do not expect another prompt.',
+  'Once the review is under way, later stops stay quiet until it reaches a verdict, so do not expect another prompt.',
 ].join(' ');
 
 function emitBlock({ skillCommand, systemMessage }) {
@@ -672,9 +731,23 @@ function main() {
     // in this session can be mistaken for part of it.
     const activeRun = readRunRecord(sessionId);
     if (isPending(activeRun)) {
-      const ended = reviewEndedSince(sessionId, seenUntil(activeRun), payload, readTranscriptTail(transcriptPath), true);
-      if (ended) settleReview(sessionId, cwd, activeRun, ended);
-      else writeRunRecord(sessionId, { ...activeRun, last_seen_at: nowMs() });
+      const activeTail = readTranscriptTail(transcriptPath);
+      const ended = reviewEndedSince(sessionId, seenUntil(activeRun), payload, activeTail, true);
+      if (ended) {
+        settleReview(sessionId, cwd, activeRun, ended);
+        // A terminal state file the skill left live belongs to this verdict. Archive
+        // it now, or the next ordinary stop would settle a second time and record
+        // work done after the review as reviewed.
+        archiveTerminalState(sessionId);
+      } else if (reviewStarted(sessionId, activeRun, activeTail)) {
+        writeRunRecord(sessionId, { ...activeRun, started: true, last_seen_at: nowMs() });
+      } else {
+        // The turn our block continued ended without starting a review: declined.
+        // Stop waiting. The dispatch record stays, so this same state does not ask
+        // again, and new work does.
+        writeRunRecord(sessionId, { ...activeRun, dispatched_at: null, last_seen_at: nowMs() });
+        logLine(`review-not-started: session=${sessionId} ended the continued turn without starting a review; no longer waiting`);
+      }
     }
     emitAllowStop('stop_hook_active=true (re-entry guard)');
   }
@@ -709,8 +782,14 @@ function main() {
   }
   if (liveState && TERMINAL_COMPLETIONS.has(liveState.completion)) {
     archiveAndExit(sessionStatePath);
-    settleReview(sessionId, cwd, run, `state ${liveState.completion}`);
-    emitAllowStop(`state terminal: ${liveState.completion}`);
+    // Settle once per verdict. If this state was written before the last settle,
+    // its verdict is already recorded, and what changed since is new work.
+    const alreadySettled = !!(run && run.settled_at && liveStateMtime <= run.settled_at);
+    if (!alreadySettled) {
+      settleReview(sessionId, cwd, run, `state ${liveState.completion}`);
+      emitAllowStop(`state terminal: ${liveState.completion}`);
+    }
+    liveState = null;
   }
   {
     const pending = isPending(run);
@@ -727,13 +806,16 @@ function main() {
     }
     if (pending) {
       const ageMin = Math.round((nowMs() - run.dispatched_at) / 60000);
-      if (nowMs() - run.dispatched_at < REVIEW_STALE_MS) {
-        writeRunRecord(sessionId, { ...run, last_seen_at: nowMs() });
+      const started = reviewStarted(sessionId, run, tail);
+      if (started && nowMs() - run.dispatched_at < REVIEW_STALE_MS) {
+        writeRunRecord(sessionId, { ...run, started: true, last_seen_at: nowMs() });
         emitAllowStop(`review-in-progress: dispatched ${ageMin}m ago for this session, no verdict yet`);
       }
-      // No verdict within the window: stop waiting, and let the gates below decide
-      // on what has changed since.
-      logLine(`review-stale: session=${sessionId} dispatched ${ageMin}m ago with no verdict; re-arming`);
+      // Never started (declined or interrupted), or no verdict within the window:
+      // stop waiting, and let the gates below decide on what has changed since.
+      logLine(started
+        ? `review-stale: session=${sessionId} dispatched ${ageMin}m ago with no verdict; re-arming`
+        : `review-not-started: session=${sessionId} was asked ${ageMin}m ago and started no review; no longer waiting`);
       run = { ...run, dispatched_at: null };
       writeRunRecord(sessionId, run);
     }
@@ -832,6 +914,15 @@ function main() {
   // Independence: the Stop event fires IN the authoring session, so a hook-dispatched
   // review is a self-review unless the tree was already dirty when the session began.
   // Pass what was measured rather than assuming either way.
+  // A bystander stops many times beside the same foreign work. The guard reads
+  // whole transcripts, so its "none of these are yours" answer is kept for as long
+  // as the reviewable files stay byte-identical: this session cannot have written
+  // a file whose content has not changed.
+  const stateKey = crypto.createHash('sha256').update(JSON.stringify(
+    reviewableFiles.map(f => [relKey(f), fingerprints[relKey(f)]]).sort())).digest('hex');
+  if (run && run.not_authored_key === stateKey) {
+    emitAllowStop(`not-authored: the ${reviewableFiles.length} reviewable changed file(s) are unchanged since the guard last found none of them this session's`);
+  }
   const authorship = checkAuthorship(sessionId, cwd);
   const independence = authorship ? authorship.independence : 'unverified';
   // The files this dispatch covers. When the guard can name this session's files,
@@ -842,15 +933,23 @@ function main() {
     // The guard could read the transcripts and the tree, so it can say which
     // changed files this session wrote. A shared checkout holds other sessions'
     // uncommitted work too, and blocking this session on that work only produced
-    // "these changes are not mine" replies (at least six sessions, 19-23 Nov 2026).
+    // "these changes are not mine" replies (several sessions, 19-23 Nov 2026).
     const wrote = new Set(
       authorship.authoredFiles.concat(authorship.weakFiles, authorship.timingFiles).map(relKey),
     );
     // A deleted file has no modification time and `rm` names no write, so the
     // guard has no way to attribute a deletion. Missing signals are not proof the
     // session did not make it: a deleted reviewable file counts as possibly its own.
-    const mine = reviewableFiles.filter(f => wrote.has(relKey(f)) || fingerprints[relKey(f)] === 'absent');
+    // A file the session wrote and then moved sits here under a path no tool call
+    // names. If the session wrote files in this repo that are now gone, every new
+    // file (untracked, or added since HEAD) counts as possibly its own.
+    const newFiles = authorship.orphanedEdits.length
+      ? new Set(untracked.concat(gitAddedFiles(cwd)).map(relKey))
+      : new Set();
+    const mine = reviewableFiles.filter(f => wrote.has(relKey(f))
+      || fingerprints[relKey(f)] === 'absent' || newFiles.has(relKey(f)));
     if (mine.length === 0) {
+      writeRunRecord(sessionId, { ...(run || {}), not_authored_key: stateKey });
       emitAllowStop(`not-authored: this session wrote none of the ${reviewableFiles.length} reviewable changed file(s) `
         + `[${reviewableFiles.slice(0, 5).join(', ')}${reviewableFiles.length > 5 ? ', …' : ''}] (guard=${independence})`);
     }
@@ -876,7 +975,7 @@ function main() {
   const coveredPrints = {};
   for (const f of covered) coveredPrints[relKey(f)] = fingerprints[relKey(f)];
   recordDispatched(firedPath, coveredPrints, files, gitBranch(cwd));
-  writeRunRecord(sessionId, { ...(run || {}), dispatched_at: nowMs(), mode, files: covered.map(relKey) });
+  writeRunRecord(sessionId, { ...(run || {}), dispatched_at: nowMs(), started: false, mode, files: covered.map(relKey) });
   const iteration = 0; // first invocation; skill will increment internally.
   const reviewable = planFiles.length + codeFiles.length + deliverableFiles.length;
   const selfAuthored = independence === 'refused' || independence === 'self-acknowledged';

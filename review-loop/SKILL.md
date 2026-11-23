@@ -45,13 +45,15 @@ in the three cases below, each logged to `.local-state/hook.log` with its reason
   shell command that names the file, or by a shell command that was running when the file was last modified
   (the only sign of an edit made through a script). If none of the reviewable files is among them, the stop
   goes through. A deleted file carries none of those signs, so a deletion always counts as possibly this
-  session's. When the hook does dispatch, it records only this session's files as handed to a review, so
+  session's; so does a new file when the session wrote a file in the repo that is now gone (it may have
+  been moved). When the hook does dispatch, it records only this session's files as handed to a review, so
   the session that wrote the other changed files still gets its own. If the guard can't tell (no transcript found, or Git unreadable), the hook still runs the
   review and marks it `unverified`, because an unreadable transcript isn't evidence that the work is
   someone else's.
-- **A review is already running** (`review-in-progress`). After the hook dispatches a review for a session,
-  that session's later stops go through quietly until the review reaches a verdict or an hour passes with
-  none. The same holds while a review the session started by hand has live state. When the verdict arrives,
+- **A review is already running** (`review-in-progress`). Once a session has acted on the hook's request
+  (it invoked this skill or dispatched a reviewer), its later stops go through quietly until the review
+  reaches a verdict or 90 minutes pass with none. A session that declines the request, or is interrupted
+  before starting, isn't silenced: the same files don't ask again, and new work does. The same holds while a review the session started by hand has live state. When the verdict arrives,
   the hook records the files as the review left them, so the review's own fixes don't start a second one.
 
 When someone asks how to pause or tune the automatic review, these are the switches:
@@ -194,9 +196,11 @@ If `--independence` was already passed by the hook, trust it and skip re-running
 
 The guard's verdict rests on edit-tool calls only. It also reports two weaker signs, `weakFiles` (a
 write-shaped shell command that names the file) and `timingFiles` (a file last modified while one of this
-session's shell commands was running). Neither changes the verdict or the exit code. A hook-dispatched run
-marked `independent` may still be reviewing files the session wrote through a script, which is why the
-hook dispatched it; say so on the verdict when `timingFiles` or `weakFiles` isn't empty.
+session's shell or edit commands was running). Neither changes the verdict or the exit code. A
+hook-dispatched run marked `independent` may still be reviewing files the session wrote through a script,
+which is why the hook dispatched it. The hook passes only the verdict, so read the two lists from the
+guard's receipt, `.local-state/<session-id>.independence.json`, and say so on the verdict when either
+isn't empty.
 
 **One review per session.** Before starting, check `.local-state/<session-id>.json` for a prior
 completed run. A second `/review-loop` in a session that already ran one shares the first
@@ -450,7 +454,7 @@ Every run produces a final assistant text block ending with exactly one of:
 - `<promise>review-clean</promise>`
 - `<promise>review-stalled</promise>`
 - `<promise>review-exhausted</promise>`
-- (no promise marker if iteration continues — the hook re-invokes you)
+- (no promise marker while iterations continue; the next iteration runs in the same turn)
 
 The Stop hook reads stdout for the JSON `{decision, reason, systemMessage}` block; the user sees the assistant text.
 The hook also reads that promise marker, in the final reply or the transcript, to know the review is over.
@@ -610,7 +614,7 @@ this no-ops.
 
 ## State archival
 
-On terminal exit (clean / stalled / exhausted), move `state/<session-id>.json` to `state/archive/<session-id>-<unix-ts>.json` and the `.lock` file is removed. The hook checks for terminal `completion` field and exits 0 if present (per its escape-hatch list). It doesn't matter which of the two archives the file first: the hook also treats an archived state file for the session, or the promise marker in the final reply, as the verdict, and records the files as the review left them.
+On terminal exit (clean / stalled / exhausted), move `state/<session-id>.json` to `state/archive/<session-id>-<unix-ts>.json` and the `.lock` file is removed. The hook checks for terminal `completion` field and exits 0 if present (per its escape-hatch list). Either may archive the file: the hook also treats an archived state file for the session, or the promise marker in the final reply, as the verdict, records the files as the review left them once per verdict, and archives a terminal state file it finds still live.
 
 ## Cost discipline
 

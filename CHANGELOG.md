@@ -16,8 +16,8 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   reviewable file's content instead of the whole tree's diff, so editing a note beside an already-reviewed
   script no longer starts another review; (2) it lets the stop through when the session wrote none of the
   reviewable files, which is the usual case for another session's uncommitted work in a shared checkout;
-  (3) after it dispatches a review it stays quiet for that session until the review reaches a verdict or an
-  hour passes, and it records the files as the review left them so the review's own fixes don't start a
+  (3) once the session has started the review it stays quiet for that session until the review reaches a
+  verdict or 90 minutes pass (a declined request doesn't silence it), and it records the files as the review left them so the review's own fixes don't start a
   second one; (4) its block message and the skill's new "closing reply" step tell the session to restate
   the full main result first and the review outcome second. The authorship guard gains a `timingFiles`
   signal (a file last modified while one of the session's shell commands ran), because sessions that edit

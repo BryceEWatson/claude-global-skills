@@ -20,8 +20,8 @@
  *   weak    — a write-shaped Bash or PowerShell command mentioning a diff file's path. Real
  *             false-positive rate (e.g. `git diff scripts/x.mjs > out.txt` matches), so it WARNS
  *             and never hard-refuses on its own.
- *   timing  — a diff file whose modification time falls inside one of this session's shell tool
- *             calls (between the call and its result). This is the only signal that sees an edit
+ *   timing  — a diff file whose modification time falls inside one of this session's shell or
+ *             edit tool calls (between the call and its result). This is the only signal that sees an edit
  *             made THROUGH a script (`python patch.py`, a heredoc after `cd`), where the file's
  *             path never appears in the command. Measured on 2026-11-23: sessions that wrote all
  *             their code that way were reported `independent`. It is circumstantial (another
@@ -45,8 +45,8 @@ import { fileURLToPath } from "node:url";
 
 export const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
-/** Bash verbs that can create or mutate a file. Read-only verbs are deliberately absent. */
-const WRITE_VERB = /(?:^|[\s;&|(])(?:tee|sed\s+-i|dd\s|truncate\s|install\s|patch\s|Set-Content|Add-Content|Out-File)|>>?[^>]/i;
+/** Shell verbs that can create, move, remove or mutate a file. Read-only verbs are deliberately absent. */
+const WRITE_VERB = /(?:^|[\s;&|(])(?:tee|sed\s+-i|dd\s|truncate\s|install\s|patch\s|mv\s|cp\s|rm\s|Set-Content|Add-Content|Out-File|Move-Item|Copy-Item|Rename-Item|Remove-Item)|>>?[^>]/i;
 
 /** Shell tools: their commands can write files without naming them (see the timing tier). */
 export const SHELL_TOOLS = new Set(["Bash", "PowerShell"]);
@@ -116,7 +116,7 @@ export function extractAuthoredPaths(jsonlText, { diffPaths = [] } = {}) {
   const editTool = new Set();
   const bashWrite = new Set();
   const diffNorm = diffPaths.map(normalizePath).filter(Boolean);
-  // Shell call windows: tool_use id -> start ms, closed by the matching tool_result's timestamp.
+  // Shell and edit call windows: tool_use id -> start ms, closed by the matching tool_result's timestamp.
   const open = new Map();
   const shellWindows = [];
 
@@ -139,7 +139,9 @@ export function extractAuthoredPaths(jsonlText, { diffPaths = [] } = {}) {
         continue;
       }
       if (block?.type !== "tool_use") continue;
-      if (SHELL_TOOLS.has(block.name) && block.id && Number.isFinite(at)) open.set(block.id, at);
+      // Edit tools get a window too: a file written by Write and then moved keeps the
+      // Write's modification time under a path no edit-tool call names.
+      if ((SHELL_TOOLS.has(block.name) || EDIT_TOOLS.has(block.name)) && block.id && Number.isFinite(at)) open.set(block.id, at);
       if (EDIT_TOOLS.has(block.name)) {
         const fp = block.input?.file_path || block.input?.notebook_path;
         const norm = canonicalize(fp);
@@ -259,6 +261,21 @@ export function diffFiles(repoRoot, { scope = "auto", base = null } = {}) {
 /**
  * Core decision. Pure over its inputs so the tests can drive it without a repo or a transcript.
  */
+/**
+ * Edit-tool targets that are not in the diff. `main` keeps the ones inside the repo that no longer
+ * exist on disk: the session wrote a file there and it is gone, so it was moved or deleted. A moved
+ * file sits in the diff under a path no tool call names, which is why the Stop hook treats new files
+ * as possibly this session's whenever this list is not empty.
+ */
+export function editTargetsOutsideDiff({ transcripts, diff }) {
+  const diffAbs = new Set(diff.map((d) => d.abs));
+  const out = new Set();
+  for (const text of transcripts) {
+    for (const p of extractAuthoredPaths(text).editTool) if (!diffAbs.has(p)) out.add(p);
+  }
+  return [...out];
+}
+
 export function assessAuthorship({ sessionId, transcripts, diff, transcriptsFound, probeFailed = false, mtimes = null }) {
   const diffAbs = diff.map((d) => d.abs);
   const relByAbs = new Map(diff.map((d) => [d.abs, d.rel]));
@@ -454,6 +471,18 @@ export function main(argv = process.argv.slice(2)) {
     mtimes,
   });
 
+  // Files this session wrote inside the repo that are no longer there (moved or deleted).
+  const rootAbs = canonicalize(repoRoot);
+  let topAbs = rootAbs;
+  try {
+    topAbs = canonicalize(execFileSync("git", ["-C", repoRoot, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()) || rootAbs;
+  } catch { /* not a checkout: the probe failure is already reported */ }
+  const orphanedEdits = editTargetsOutsideDiff({ transcripts: texts, diff })
+    .filter((p) => p.startsWith(`${topAbs}/`) && !fs.existsSync(p))
+    .map((p) => p.slice(topAbs.length + 1))
+    .sort();
+
   const receipt = {
     sessionId: args.sessionId,
     checkedAt: new Date().toISOString(),
@@ -461,6 +490,7 @@ export function main(argv = process.argv.slice(2)) {
     transcriptsRead: files.length,
     diffFileCount: diff.length,
     ...result,
+    orphanedEdits,
     selfReviewAck: args.selfReviewAck,
     independence:
       result.verdict === "self-authored" && args.selfReviewAck !== null

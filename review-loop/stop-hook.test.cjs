@@ -714,21 +714,29 @@ test('authorship: other sessions\' later changes do not re-fire once this sessio
 
 function runRecordPath(home, sid) { return path.join(home, ...STATE_REL, `${sid}.hook-review.json`); }
 
+// What the transcript holds once the session has acted on the block: a reviewer dispatched.
+function appendReviewerDispatch(transcript) {
+  fs.appendFileSync(transcript, JSON.stringify({ type: 'assistant',
+    timestamp: new Date(Date.now() + 1000).toISOString(), message: { content: [
+      { type: 'tool_use', name: 'Agent', id: 'rv', input: { description: 'adversarial review' } }] } }) + '\n');
+}
+
 test('in progress: a second stop while the dispatched review is unfinished stays quiet', () => {
   const home = mkTempHome();
   const repo = mkRepoWithDirtyFile(home);
   const transcript = fakeTranscriptWithEdit(home, 'prog');
   const sid = 'sid-in-progress';
   assert.ok(parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript })));
+  appendReviewerDispatch(transcript);
   // Reviewers are still out; the session keeps working and stops again.
   fs.writeFileSync(path.join(repo, 'src', 'a.js'), 'let x = 3;\n');
   const r = runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript });
   assert.equal(parseStdout(r), null, 'must not block again with --iteration 0');
   assert.match(hookLog(home), /review-in-progress: dispatched 0m ago/);
 
-  // An hour later with no verdict, the hook stops waiting and re-arms.
+  // Ninety minutes later with no verdict, the hook stops waiting and re-arms.
   const rec = JSON.parse(fs.readFileSync(runRecordPath(home, sid), 'utf8'));
-  rec.dispatched_at = Date.now() - 61 * 60 * 1000;
+  rec.dispatched_at = Date.now() - 91 * 60 * 1000;
   fs.writeFileSync(runRecordPath(home, sid), JSON.stringify(rec));
   const late = parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript }));
   assert.ok(late && late.decision === 'block', 'a stale review no longer silences the hook');
@@ -768,6 +776,7 @@ test('in progress: a verdict written to the transcript after the dispatch ends t
       { type: 'tool_use', name: 'Edit', id: 'e', input: {} }] } },
   ]);
   assert.ok(parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript })));
+  appendReviewerDispatch(transcript);
   const quiet = runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript });
   assert.equal(parseStdout(quiet), null);
   assert.match(hookLog(home), /review-in-progress/, 'quoted skill text is not a verdict');
@@ -862,4 +871,95 @@ test('authorship: a deletion nobody can be shown to have made still fires', () =
   const transcript = writeTranscript(home, sid, [editRecord(path.join(home, 'notes', 'n.md'))]);
   const out = parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript }));
   assert.ok(out && out.decision === 'block', 'missing signals are not proof the session did not delete it');
+});
+
+test('in progress: a declined review does not silence the session', () => {
+  const home = mkTempHome();
+  const repo = mkRepoWithDirtyFile(home);
+  const transcript = fakeTranscriptWithEdit(home, 'declined');
+  const sid = 'sid-declined';
+  assert.ok(parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript })));
+  // The session answers the block in a sentence and starts no review.
+  const ending = runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript,
+    stop_hook_active: true, last_assistant_message: 'Not running a review now.' });
+  assert.equal(parseStdout(ending), null);
+  assert.match(hookLog(home), /review-not-started/);
+  // The same state does not ask again...
+  assert.equal(parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript })), null);
+  // ...but new code does, straight away.
+  fs.writeFileSync(path.join(repo, 'src', 'd.js'), 'let d = 1;\n');
+  const next = parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript }));
+  assert.ok(next && next.decision === 'block', 'a declined review must not buy an hour of silence');
+});
+
+test('in progress: an interrupted block (no continued turn at all) does not silence the session', () => {
+  const home = mkTempHome();
+  const repo = mkRepoWithDirtyFile(home);
+  const transcript = fakeTranscriptWithEdit(home, 'interrupted');
+  const sid = 'sid-interrupted';
+  assert.ok(parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript })));
+  fs.writeFileSync(path.join(repo, 'src', 'd.js'), 'let d = 1;\n');
+  const next = parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript }));
+  assert.ok(next && next.decision === 'block');
+});
+
+test('in progress: a terminal state file left live is settled once, not again after later edits', () => {
+  const home = mkTempHome();
+  const repo = mkRepoWithDirtyFile(home);
+  const transcript = fakeTranscriptWithEdit(home, 'twice-settled');
+  const sid = 'sid-settle-once';
+  assert.ok(parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript })));
+  fs.writeFileSync(path.join(home, ...STATE_REL, `${sid}.json`), JSON.stringify({ completion: 'review-clean' }));
+  runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript,
+    stop_hook_active: true, last_assistant_message: 'Result.\n<promise>review-clean</promise>' });
+  assert.equal(fs.existsSync(path.join(home, ...STATE_REL, `${sid}.json`)), false, 'archived with its verdict');
+  // Work after the review, on the file the review covered.
+  fs.writeFileSync(path.join(repo, 'src', 'a.js'), 'let x = 99; // after the review\n');
+  const next = parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript }));
+  assert.ok(next && next.decision === 'block', 'post-review edits are new work, not part of the verdict');
+});
+
+test('authorship: a file written by an edit tool and then moved is still this session\'s', () => {
+  const home = mkTempHome();
+  const repo = mkRepoWithDirtyFile(home);
+  git(repo, 'checkout', '-q', '--', '.');
+  const moved = path.join(repo, 'src', 'moved.js');
+  fs.writeFileSync(moved, 'let m = 1;\n');           // Write src/draft.js, then `mv` to src/moved.js
+  deployGuard(home);
+  const sid = 'sid-mover';
+  const transcript = writeTranscript(home, sid, [
+    { type: 'assistant', timestamp: new Date(Date.now() - 30000).toISOString(), message: { content: [
+      { type: 'tool_use', name: 'Write', id: 'w1', input: { file_path: path.join(repo, 'src', 'draft.js') } }] } },
+    { type: 'user', timestamp: new Date(Date.now() + 30000).toISOString(), message: { content: [
+      { type: 'tool_result', tool_use_id: 'w1', content: 'ok' }] } },
+  ]);
+  const out = parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript }));
+  assert.ok(out && out.decision === 'block', 'the move keeps the Write\'s modification time');
+});
+
+test('authorship: a bystander\'s repeat stops skip the guard while the files are unchanged', () => {
+  const home = mkTempHome();
+  const repo = mkRepoWithDirtyFile(home);
+  deployGuard(home);
+  const sid = 'sid-bystander-again';
+  const transcript = writeTranscript(home, sid, [editRecord(path.join(home, 'notes', 'v.md'))]);
+  assert.equal(parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript })), null);
+  assert.equal(parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript })), null);
+  assert.match(hookLog(home), /unchanged since the guard last found none of them this session's/);
+});
+
+test('authorship: a moved file is caught even when nothing dates the move', () => {
+  const home = mkTempHome();
+  const repo = mkRepoWithDirtyFile(home);
+  git(repo, 'checkout', '-q', '--', '.');
+  const moved = path.join(repo, 'src', 'new.js');
+  fs.writeFileSync(moved, 'let m = 1;\n');
+  const old = new Date(Date.now() - 2 * 3600 * 1000);
+  fs.utimesSync(moved, old, old);                     // no tool call window covers this time
+  deployGuard(home);
+  const sid = 'sid-mover-undated';
+  // The edit names src/old.js, which is gone; `cd src && mv old.js new.js` names no repo path.
+  const transcript = writeTranscript(home, sid, [editRecord(path.join(repo, 'src', 'old.js'))]);
+  const out = parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript }));
+  assert.ok(out && out.decision === 'block', 'the session wrote a file here that is gone, so the new file may be it');
 });
