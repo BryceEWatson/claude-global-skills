@@ -45,8 +45,8 @@ in the three cases below, each logged to `.local-state/hook.log` with its reason
   shell command that names the file, or by a shell command that was running when the file was last modified
   (the only sign of an edit made through a script). If none of the reviewable files is among them, the stop
   goes through. A deleted file carries none of those signs, so a deletion always counts as possibly this
-  session's; so does a new file when the session wrote a file in the repo that is now gone (it may have
-  been moved). When the hook does dispatch, it records only this session's files as handed to a review, so
+  session's; so does a new file of the same type (same extension) as a file the session wrote in the repo that
+  is now gone and that it did not remove itself (it may have been moved). When the hook does dispatch, it records only this session's files as handed to a review, so
   the session that wrote the other changed files still gets its own. If the guard can't tell (no transcript found, or Git unreadable), the hook still runs the
   review and marks it `unverified`, because an unreadable transcript isn't evidence that the work is
   someone else's.

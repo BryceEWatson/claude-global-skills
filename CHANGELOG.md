@@ -23,7 +23,9 @@ grouped by **date** instead of strict [Semantic Versioning](https://semver.org/)
   signal (a file last modified while one of the session's shell commands ran), because sessions that edit
   through scripts were being reported as `independent`; it also sees files inside a new untracked directory
   and PowerShell writes. The independence verdict and the self-review marking are unchanged.
-  `REVIEW_LOOP_STATE_DIR` moves the hook's state and log for a test or a replay.
+  `REVIEW_LOOP_STATE_DIR` moves the hook's state and log for a test or a replay. Replaying the 44 blocks
+  through the changed hook: 14 no longer fire, 1 still fires and should, and 29 depend on file states of
+  the time that can't be rebuilt, so they are not counted either way.
 
 - **`weekly-work-log` vets each new Akaya row.** brycewatson.com now shows Akaya on its work log
   (Bryce, 20 Oct 2026: "Akaya is worth sharing"), but a row publishes only once it has a verdict in
