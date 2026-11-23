@@ -34,7 +34,27 @@ plan or deliverable files, and runs only when that set isn't empty. So a new unt
 with Write triggers it, and so does a dirty tracked diff with no Edit or Write at all. It skips when the
 transcript (its last 200 KB) shows no Edit or Write and `git diff HEAD` is empty, even if untracked files
 exist; when nothing reviewable changed (only docs, handoffs, lockfiles, scratch or generated files); and
-when it already dispatched a review for this exact diff.
+in the three cases below, each logged to `.local-state/hook.log` with its reason.
+
+- **Already dispatched** (`diff-unchanged-since-last-review`). The hook remembers, per reviewable file, the
+  content it last handed to a review. It runs again only when a plan, code or deliverable file has changed
+  since. Editing a file it skips (a note, a ledger, a lockfile) beside an already-reviewed script doesn't
+  start another review.
+- **Not this session's work** (`not-authored`). A shared checkout often holds another session's uncommitted
+  work. The hook asks the authorship guard which changed files this session wrote: by an edit tool, by a
+  shell command that names the file, or by a shell command that was running when the file was last modified
+  (the only sign of an edit made through a script). If none of the reviewable files is among them, the stop
+  goes through. A deleted file carries none of those signs, so a deletion always counts as possibly this
+  session's; so does a new file of the same type (same extension) as a file the session wrote in the repo that
+  is now gone and that it did not remove itself (it may have been moved). When the hook does dispatch, it records only this session's files as handed to a review, so
+  the session that wrote the other changed files still gets its own. If the guard can't tell (no transcript found, or Git unreadable), the hook still runs the
+  review and marks it `unverified`, because an unreadable transcript isn't evidence that the work is
+  someone else's.
+- **A review is already running** (`review-in-progress`). Once a session has acted on the hook's request
+  (it invoked this skill or dispatched a reviewer), its later stops go through quietly until the review
+  reaches a verdict or 90 minutes pass with none. A session that declines the request, or is interrupted
+  before starting, isn't silenced: the same files don't ask again, and new work does. The same holds while a review the session started by hand has live state. When the verdict arrives,
+  the hook records the files as the review left them, so the review's own fixes don't start a second one.
 
 When someone asks how to pause or tune the automatic review, these are the switches:
 
@@ -48,7 +68,10 @@ When someone asks how to pause or tune the automatic review, these are the switc
   line (the agent file's name without `.md`). Step 4 skips each listed `Task` lens. It can't switch off
   the execution-grounded check, which runs in code mode regardless, and a run left with no enabled lens
   for its mode stops as not clean rather than reporting clean (see "Dispatch (all modes)" in Step 4).
-- **State:** `~/.claude/skills/review-loop/.local-state/<session-id>.json`.
+- **State:** `~/.claude/skills/review-loop/.local-state/<session-id>.json`. The hook keeps its own two
+  records beside it: `<session-id>.hook-review.json` (when it dispatched a review for the session and when
+  that review ended) and `lastfired-<repo>.json` (the reviewable files already handed to a review). Set
+  `REVIEW_LOOP_STATE_DIR` to keep all of it, and the log, somewhere else, for a test or a replay.
 - **Install manifest:** `~/.claude/skills/review-loop/.local-state/install-manifest.json`.
 - **Install / uninstall:** `node ~/.claude/skills/review-loop/install.cjs` /
   `node ~/.claude/skills/review-loop/uninstall.cjs`.
@@ -170,6 +193,14 @@ Act on the exit code:
   Could-not-determine is never upgraded to independent.
 
 If `--independence` was already passed by the hook, trust it and skip re-running the guard.
+
+The guard's verdict rests on edit-tool calls only. It also reports two weaker signs, `weakFiles` (a
+write-shaped shell command that names the file) and `timingFiles` (a file last modified while one of this
+session's shell or edit commands was running). Neither changes the verdict or the exit code. A
+hook-dispatched run marked `independent` may still be reviewing files the session wrote through a script,
+which is why the hook dispatched it. The hook passes only the verdict, so read the two lists from the
+guard's receipt, `.local-state/<session-id>.independence.json`, and say so on the verdict when either
+isn't empty.
 
 **One review per session.** Before starting, check `.local-state/<session-id>.json` for a prior
 completed run. A second `/review-loop` in a session that already ran one shares the first
@@ -423,9 +454,27 @@ Every run produces a final assistant text block ending with exactly one of:
 - `<promise>review-clean</promise>`
 - `<promise>review-stalled</promise>`
 - `<promise>review-exhausted</promise>`
-- (no promise marker if iteration continues — the hook re-invokes you)
+- (no promise marker while iterations continue; the next iteration runs in the same turn)
 
 The Stop hook reads stdout for the JSON `{decision, reason, systemMessage}` block; the user sees the assistant text.
+The hook also reads that promise marker, in the final reply or the transcript, to know the review is over.
+
+### The closing reply (hook-invoked runs)
+
+When the hook starts a review, the session had usually just written its real answer. The review's reply
+then lands underneath it, and the user is left reading "the review fixed X" with the main result scrolled
+away (Bryce, 2026-11-23: "the hook replies push the conversation up so I'm always scrolling back in
+conversations to get the real picture"). So the final reply of a hook-invoked run stands on its own:
+
+1. **The full main result first**, as the session had reported it before the review started: what is now
+   true, what it found, what it needs from the user. Restate it; don't point back at an earlier message.
+2. **Then the review outcome**: the verdict, what it fixed, what it left open.
+3. **A review with nothing to add resends the previous reply with at most one added line** about the
+   review. Never a bare "Done", and never a reply that only says what the review fixed.
+4. The promise marker still ends the reply.
+
+If the review changed the main result (a fix altered a number, a claim or a file the answer named), the
+restated result is the corrected one, and the reply says what changed.
 
 ## Leave a trail on the PR (ALWAYS, when one exists)
 
@@ -565,7 +614,7 @@ this no-ops.
 
 ## State archival
 
-On terminal exit (clean / stalled / exhausted), move `state/<session-id>.json` to `state/archive/<session-id>-<unix-ts>.json` and the `.lock` file is removed. The hook checks for terminal `completion` field and exits 0 if present (per its escape-hatch list).
+On terminal exit (clean / stalled / exhausted), move `state/<session-id>.json` to `state/archive/<session-id>-<unix-ts>.json` and the `.lock` file is removed. The hook checks for terminal `completion` field and exits 0 if present (per its escape-hatch list). Either may archive the file: the hook also treats an archived state file for the session, or the promise marker in the final reply, as the verdict, records the files as the review left them once per verdict, and archives a terminal state file it finds still live.
 
 ## Cost discipline
 
@@ -584,4 +633,4 @@ Print a one-line preamble: *"Running /review-loop on <branch>, iter <N>/<max>, s
 - Per memory entry `feedback-confidence-per-step`: each reviewer's prompt instructs it to **label `load_bearing` honestly** — in-iter fixes are limited to load-bearing items; speculative items surface as the exit checklist.
 - Per memory entry `feedback-claude-code-not-api`: when surfacing cost to the user, label as "plan usage (API-equivalent)" not "$X spent."
 - The Stop hook handles the infinite-loop guard (env var `CLAUDE_REVIEW_LOOP_ACTIVE=1` is set before each iteration's re-invocation); the skill itself does not need to check this — if you're running, you've been invited.
-- The Stop hook is a cheap **always-on gate, not an always-on review**: after the safety exits it also skips when **nothing reviewable changed** (only docs / handoffs / lockfiles / scratch / generated files) or when the **exact diff was already dispatched** for review, logging the decision to `.local-state/hook.log` either way. Per-project knobs under `.claude/` in the session's working directory (normally the repo root; the hook reads these from the working directory, not the Git top level, see "When it runs, and the off-switches"): `review-loop.disabled` (opt out entirely), `review-loop.plan-paths` (globs that count as plan artifacts), `review-loop.code-exts` (extensions that count as reviewable code; the file replaces the built-in default set), `review-loop.deliverable-paths` (globs that count as reader-facing deliverables; also replaces its default set — but anything under `.claude/` stays excluded unconditionally and cannot be re-included by an override, since that path is session machinery), `review-loop.deliverable-standard` (a one-line **pointer** holding the path of the project's own deliverable/report standard, e.g. `docs/REPORT-READABILITY-STANDARD.md` — read by the lens, not by the hook, as additional checks; if it or its target can't be read the lens must say so rather than silently return `[]`).
+- The Stop hook is a cheap **always-on gate, not an always-on review**: after the safety exits it also skips when **nothing reviewable changed** (only docs / handoffs / lockfiles / scratch / generated files) when **every reviewable file was already dispatched** for review in its current content, when **this session wrote none of the reviewable files**, or while **a review this session started is still running**, logging the decision to `.local-state/hook.log` either way (see "When it runs, and the off-switches"). Per-project knobs under `.claude/` in the session's working directory (normally the repo root; the hook reads these from the working directory, not the Git top level, see "When it runs, and the off-switches"): `review-loop.disabled` (opt out entirely), `review-loop.plan-paths` (globs that count as plan artifacts), `review-loop.code-exts` (extensions that count as reviewable code; the file replaces the built-in default set), `review-loop.deliverable-paths` (globs that count as reader-facing deliverables; also replaces its default set — but anything under `.claude/` stays excluded unconditionally and cannot be re-included by an override, since that path is session machinery), `review-loop.deliverable-standard` (a one-line **pointer** holding the path of the project's own deliverable/report standard, e.g. `docs/REPORT-READABILITY-STANDARD.md` — read by the lens, not by the hook, as additional checks; if it or its target can't be read the lens must say so rather than silently return `[]`).

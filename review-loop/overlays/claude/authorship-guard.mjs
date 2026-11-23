@@ -17,9 +17,17 @@
  * SIGNAL TIERS
  *   strong  — an Edit/Write/MultiEdit/NotebookEdit tool_use whose `file_path` is in the diff.
  *             Near-zero false positives: the harness records the path it actually wrote.
- *   weak    — a write-shaped Bash command mentioning a diff file's path. Real false-positive
- *             rate (e.g. `git diff scripts/x.mjs > out.txt` matches), so it WARNS and never
- *             hard-refuses on its own.
+ *   weak    — a write-shaped Bash or PowerShell command mentioning a diff file's path. Real
+ *             false-positive rate (e.g. `git diff scripts/x.mjs > out.txt` matches), so it WARNS
+ *             and never hard-refuses on its own.
+ *   timing  — a diff file whose modification time falls inside one of this session's shell or
+ *             edit tool calls (between the call and its result). This is the only signal that sees an edit
+ *             made THROUGH a script (`python patch.py`, a heredoc after `cd`), where the file's
+ *             path never appears in the command. Measured on 2026-11-23: sessions that wrote all
+ *             their code that way were reported `independent`. It is circumstantial (another
+ *             session can write a file while this one runs a command), so like `weak` it is
+ *             reported and never refuses on its own. The Stop hook uses it only to decide whether
+ *             the session has any work of its own to review.
  *
  * FAIL-OPEN BY DESIGN. If the transcript cannot be found or read, the verdict is `unverified`,
  * not `self-authored`. A guard that wrongly claims "you wrote this" blocks legitimate reviews
@@ -37,8 +45,14 @@ import { fileURLToPath } from "node:url";
 
 export const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
-/** Bash verbs that can create or mutate a file. Read-only verbs are deliberately absent. */
-const WRITE_VERB = /(?:^|[\s;&|(])(?:tee|sed\s+-i|dd\s|truncate\s|install\s|patch\s)|>>?[^>]/;
+/** Shell verbs that can create, move, remove or mutate a file. Read-only verbs are deliberately absent. */
+const WRITE_VERB = /(?:^|[\s;&|(])(?:tee|sed\s+-i|dd\s|truncate\s|install\s|patch\s|mv\s|cp\s|rm\s|Set-Content|Add-Content|Out-File|Move-Item|Copy-Item|Rename-Item|Remove-Item)|>>?[^>]/i;
+
+/** Shell tools: their commands can write files without naming them (see the timing tier). */
+export const SHELL_TOOLS = new Set(["Bash", "PowerShell"]);
+
+/** Slack around a shell call's window when matching a file's modification time, in ms. */
+const TIMING_SLACK_MS = 2000;
 
 /**
  * Normalize a path for comparison. Handles the three shapes the corpus actually contains:
@@ -102,6 +116,10 @@ export function extractAuthoredPaths(jsonlText, { diffPaths = [] } = {}) {
   const editTool = new Set();
   const bashWrite = new Set();
   const diffNorm = diffPaths.map(normalizePath).filter(Boolean);
+  // Shell and edit call windows: tool_use id -> start ms, closed by the matching tool_result's timestamp.
+  const open = new Map();
+  const shellWindows = [];
+  const shellCommands = [];
 
   for (const line of String(jsonlText || "").split("\n")) {
     if (!line.trim()) continue;
@@ -113,14 +131,25 @@ export function extractAuthoredPaths(jsonlText, { diffPaths = [] } = {}) {
     }
     const content = rec?.message?.content;
     if (!Array.isArray(content)) continue;
+    const at = Date.parse(rec.timestamp);
     for (const block of content) {
+      if (block?.type === "tool_result" && open.has(block.tool_use_id)) {
+        const start = open.get(block.tool_use_id);
+        open.delete(block.tool_use_id);
+        if (Number.isFinite(at) && at >= start) shellWindows.push([start, at]);
+        continue;
+      }
       if (block?.type !== "tool_use") continue;
+      // Edit tools get a window too: a file written by Write and then moved keeps the
+      // Write's modification time under a path no edit-tool call names.
+      if ((SHELL_TOOLS.has(block.name) || EDIT_TOOLS.has(block.name)) && block.id && Number.isFinite(at)) open.set(block.id, at);
       if (EDIT_TOOLS.has(block.name)) {
         const fp = block.input?.file_path || block.input?.notebook_path;
         const norm = canonicalize(fp);
         if (norm) editTool.add(norm);
-      } else if (block.name === "Bash" && typeof block.input?.command === "string") {
+      } else if (SHELL_TOOLS.has(block.name) && typeof block.input?.command === "string") {
         const cmd = block.input.command;
+        shellCommands.push(cmd);
         if (!WRITE_VERB.test(cmd)) continue;
         const haystack = normalizePath(cmd);
         for (const d of diffNorm) {
@@ -131,7 +160,9 @@ export function extractAuthoredPaths(jsonlText, { diffPaths = [] } = {}) {
       }
     }
   }
-  return { editTool, bashWrite };
+  // A call with no recorded result (still running, or the transcript was cut) gets no window:
+  // an open-ended one would claim every later write in the checkout.
+  return { editTool, bashWrite, shellWindows, shellCommands };
 }
 
 /** Every transcript belonging to a session: its own, plus each subagent it dispatched. */
@@ -201,9 +232,14 @@ export function diffFiles(repoRoot, { scope = "auto", base = null } = {}) {
     add(git(["diff", "HEAD~1", "HEAD", "--name-only"], { optional: true }));
   } else {
     add(git(["diff", "HEAD", "--name-only"]));
-    for (const l of git(["status", "--porcelain"]).split("\n")) {
+    // --untracked-files=all: the default collapses a new directory to one `dir/` entry, so a
+    // file this session created inside it never matched and the session read as independent.
+    for (const l of git(["status", "--porcelain", "--untracked-files=all"]).split("\n")) {
       const m = l.match(/^..\s+(.+)$/);
-      if (m) names.add(m[1].replace(/^"|"$/g, "").trim());
+      if (!m) continue;
+      // A rename is listed as `old -> new`; the file under review is the new path.
+      const name = m[1].includes(" -> ") ? m[1].split(" -> ").pop() : m[1];
+      names.add(name.replace(/^"|"$/g, "").trim());
     }
     // Commits this branch carries that its base does not. Three-dot compares against the
     // merge-base, so a branch that is merely behind its base does not drag in unrelated files.
@@ -227,14 +263,39 @@ export function diffFiles(repoRoot, { scope = "auto", base = null } = {}) {
 /**
  * Core decision. Pure over its inputs so the tests can drive it without a repo or a transcript.
  */
-export function assessAuthorship({ sessionId, transcripts, diff, transcriptsFound, probeFailed = false }) {
+/**
+ * Edit-tool targets that are not in the diff. `main` keeps the ones inside the repo that no longer
+ * exist on disk: the session wrote a file there and it is gone, so it was moved or deleted. A moved
+ * file sits in the diff under a path no tool call names, which is why the Stop hook treats new files
+ * as possibly this session's whenever this list is not empty.
+ */
+export function editTargetsOutsideDiff({ transcripts, diff }) {
+  const diffAbs = new Set(diff.map((d) => d.abs));
+  const out = new Set();
+  const commands = [];
+  for (const text of transcripts) {
+    const found = extractAuthoredPaths(text);
+    for (const p of found.editTool) if (!diffAbs.has(p)) out.add(p);
+    commands.push(...found.shellCommands);
+  }
+  // A file the session itself removed was deleted, not moved: a scratch file written and then
+  // `rm`'d must not make another session's new files look like this session's.
+  const removed = (p) => {
+    const base = p.slice(p.lastIndexOf("/") + 1).toLowerCase();
+    return commands.some((c) => /(?:^|[\s;&|(])(?:rm|del|unlink|Remove-Item)\s/i.test(c) && c.toLowerCase().includes(base));
+  };
+  return [...out].filter((p) => !removed(p));
+}
+
+export function assessAuthorship({ sessionId, transcripts, diff, transcriptsFound, probeFailed = false, mtimes = null }) {
   const diffAbs = diff.map((d) => d.abs);
   const relByAbs = new Map(diff.map((d) => [d.abs, d.rel]));
 
   const edited = new Set();
   const bashSuspect = new Set();
+  const windows = [];
   for (const text of transcripts) {
-    const { editTool, bashWrite } = extractAuthoredPaths(text, {
+    const { editTool, bashWrite, shellWindows } = extractAuthoredPaths(text, {
       diffPaths: [...diffAbs, ...diff.map((d) => d.raw).filter(Boolean), ...diff.map((d) => d.rel)],
     });
     for (const p of editTool) if (diffAbs.includes(p)) edited.add(p);
@@ -242,7 +303,19 @@ export function assessAuthorship({ sessionId, transcripts, diff, transcriptsFoun
       const hit = diffAbs.find((a) => a === p || a.endsWith(`/${p}`)) || (diffAbs.includes(p) ? p : null);
       if (hit) bashSuspect.add(hit);
     }
+    windows.push(...shellWindows);
   }
+
+  // Timing tier: `mtimes` maps a diff file's absolute path to its modification time in ms.
+  const timed = new Set();
+  if (mtimes) {
+    for (const a of diffAbs) {
+      const m = mtimes.get(a);
+      if (!Number.isFinite(m) || edited.has(a)) continue;
+      if (windows.some(([s, e]) => m >= s - TIMING_SLACK_MS && m <= e + TIMING_SLACK_MS)) timed.add(a);
+    }
+  }
+  const timingFiles = [...timed].map((a) => relByAbs.get(a) || a).sort();
 
   const authoredFiles = [...edited].map((a) => relByAbs.get(a) || a).sort();
   const weakFiles = [...bashSuspect].filter((a) => !edited.has(a)).map((a) => relByAbs.get(a) || a).sort();
@@ -255,6 +328,7 @@ export function assessAuthorship({ sessionId, transcripts, diff, transcriptsFoun
       authored: false,
       authoredFiles: [],
       weakFiles: [],
+      timingFiles: [],
       reason:
         "Could not read the review scope: a git probe failed, so the set of files under review is " +
         "unknown. An unreadable scope is not an empty one.",
@@ -266,6 +340,7 @@ export function assessAuthorship({ sessionId, transcripts, diff, transcriptsFoun
       authored: false,
       authoredFiles: [],
       weakFiles: [],
+      timingFiles: [],
       reason:
         `No transcript found for session ${sessionId}. Independence could not be verified — ` +
         "this is not evidence of independence, and the verdict must say so.",
@@ -277,6 +352,7 @@ export function assessAuthorship({ sessionId, transcripts, diff, transcriptsFoun
       authored: true,
       authoredFiles,
       weakFiles,
+      timingFiles,
       reason: `This session edited ${authoredFiles.length} file(s) that are in the diff under review.`,
     };
   }
@@ -286,9 +362,22 @@ export function assessAuthorship({ sessionId, transcripts, diff, transcriptsFoun
       authored: false,
       authoredFiles: [],
       weakFiles,
+      timingFiles,
       reason:
         `No file-editing tool call targeted the diff, but ${weakFiles.length} file(s) appear in ` +
         "write-shaped shell commands. Weak signal — reported, not enforced.",
+    };
+  }
+  if (timingFiles.length) {
+    return {
+      verdict: "independent",
+      authored: false,
+      authoredFiles: [],
+      weakFiles: [],
+      timingFiles,
+      reason:
+        `No file-editing tool call targeted the diff, but ${timingFiles.length} file(s) were last ` +
+        "modified while one of this session's shell commands was running. Circumstantial — reported, not enforced.",
     };
   }
   return {
@@ -296,6 +385,7 @@ export function assessAuthorship({ sessionId, transcripts, diff, transcriptsFoun
     authored: false,
     authoredFiles: [],
     weakFiles: [],
+    timingFiles: [],
     reason: "No file-editing tool call in this session (or its subagents) targeted a file in the diff.",
   };
 }
@@ -377,13 +467,35 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   const { files: diff, probeFailed } = diffFiles(repoRoot, { scope: args.scope, base: args.base });
+  const mtimes = new Map();
+  for (const d of diff) {
+    try {
+      mtimes.set(d.abs, fs.statSync(d.raw || d.abs).mtimeMs);
+    } catch { /* a deleted file has no modification time, and so no timing signal */ }
+  }
   const result = assessAuthorship({
     sessionId: args.sessionId,
     transcripts: texts,
     diff,
     transcriptsFound: texts.length > 0,
     probeFailed,
+    mtimes,
   });
+
+  // Files this session wrote inside the repo that are no longer there (moved or deleted).
+  const rootAbs = canonicalize(repoRoot);
+  let topAbs = rootAbs;
+  try {
+    topAbs = canonicalize(execFileSync("git", ["-C", repoRoot, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()) || rootAbs;
+  } catch { /* not a checkout: the probe failure is already reported */ }
+  const orphanedEdits = editTargetsOutsideDiff({ transcripts: texts, diff })
+    .filter((p) => p.startsWith(`${topAbs}/`) && !fs.existsSync(p))
+    .map((p) => p.slice(topAbs.length + 1))
+    // Session machinery (other worktrees under .claude/worktrees/, handoffs, scratch) comes and
+    // goes without anything having been moved into the tree under review.
+    .filter((rel) => !/^\.claude\//i.test(rel))
+    .sort();
 
   const receipt = {
     sessionId: args.sessionId,
@@ -392,6 +504,7 @@ export function main(argv = process.argv.slice(2)) {
     transcriptsRead: files.length,
     diffFileCount: diff.length,
     ...result,
+    orphanedEdits,
     selfReviewAck: args.selfReviewAck,
     independence:
       result.verdict === "self-authored" && args.selfReviewAck !== null
