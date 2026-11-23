@@ -963,3 +963,74 @@ test('authorship: a moved file is caught even when nothing dates the move', () =
   const out = parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript }));
   assert.ok(out && out.decision === 'block', 'the session wrote a file here that is gone, so the new file may be it');
 });
+
+test('in progress: every lens file, handed to an agent as its prompt, reads as a started review', () => {
+  const agentsDir = path.join(__dirname, 'agents');
+  const lenses = fs.readdirSync(agentsDir).filter(n => n.endsWith('.md'));
+  assert.ok(lenses.length >= 5, 'the lens files ship beside the hook');
+  const home = mkTempHome();
+  const repo = mkRepoWithDirtyFile(home);
+  for (const [i, lens] of lenses.entries()) {
+    const sid = `sid-lens-${i}`;
+    const transcript = fakeTranscriptWithEdit(home, sid);
+    fs.writeFileSync(path.join(repo, 'src', 'a.js'), `let x = ${100 + i};\n`);
+    assert.ok(parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript })), lens);
+    // The skill is already loaded, so the only sign of the review is the agent call,
+    // described by the lens's bare name with the lens file's body as its prompt.
+    fs.appendFileSync(transcript, JSON.stringify({ type: 'assistant',
+      timestamp: new Date(Date.now() + 1000).toISOString(), message: { content: [
+        { type: 'tool_use', name: 'Agent', id: 'l', input: { description: lens.replace(/\.md$/, ''),
+          prompt: fs.readFileSync(path.join(agentsDir, lens), 'utf8') } }] } }) + '\n');
+    fs.writeFileSync(path.join(repo, 'src', 'a.js'), `let x = ${200 + i};\n`);
+    const r = runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript });
+    assert.equal(parseStdout(r), null, `${lens}: a reworded lens must not silently stop counting as a review`);
+  }
+});
+
+test('in progress: declining and then dispatching an unrelated agent does not silence the session', () => {
+  const home = mkTempHome();
+  const repo = mkRepoWithDirtyFile(home);
+  const transcript = fakeTranscriptWithEdit(home, 'unrelated');
+  const sid = 'sid-unrelated-agent';
+  assert.ok(parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript })));
+  fs.appendFileSync(transcript, JSON.stringify({ type: 'assistant',
+    timestamp: new Date(Date.now() + 1000).toISOString(), message: { content: [
+      { type: 'tool_use', name: 'Agent', id: 'u', input: { description: 'build the parser',
+        prompt: 'Write the tokenizer in src/tok.js and its tests.' } }] } }) + '\n');
+  fs.writeFileSync(path.join(repo, 'src', 'd.js'), 'let d = 1;\n');
+  const next = parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript }));
+  assert.ok(next && next.decision === 'block', 'an ordinary helper agent is not a review');
+});
+
+test('authorship: a scratch file the session wrote and removed does not claim another session\'s new file', () => {
+  const home = mkTempHome();
+  const repo = mkRepoWithDirtyFile(home);
+  git(repo, 'checkout', '-q', '--', '.');
+  fs.writeFileSync(path.join(repo, 'src', 'y.js'), 'let y = 1;\n');   // another session's new file
+  const old = new Date(Date.now() - 2 * 3600 * 1000);
+  fs.utimesSync(path.join(repo, 'src', 'y.js'), old, old);
+  deployGuard(home);
+  const sid = 'sid-scratch';
+  const transcript = writeTranscript(home, sid, [
+    editRecord(path.join(repo, 'scratch-check.js')),
+    { type: 'assistant', timestamp: new Date().toISOString(), message: { content: [
+      { type: 'tool_use', name: 'Bash', id: 'r1', input: { command: 'node scratch-check.js; rm scratch-check.js' } }] } },
+  ]);
+  const r = runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript });
+  assert.equal(parseStdout(r), null, 'the scratch file was removed, not moved');
+  assert.match(hookLog(home), /not-authored/);
+});
+
+test('authorship: a staged rename of an edited file is still this session\'s', () => {
+  const home = mkTempHome();
+  const repo = mkRepoWithDirtyFile(home);
+  git(repo, 'checkout', '-q', '--', '.');
+  git(repo, 'mv', 'src/a.js', 'src/renamed.js');
+  const old = new Date(Date.now() - 2 * 3600 * 1000);
+  fs.utimesSync(path.join(repo, 'src', 'renamed.js'), old, old);    // nothing dates the edit
+  deployGuard(home);
+  const sid = 'sid-git-mv';
+  const transcript = writeTranscript(home, sid, [editRecord(path.join(repo, 'src', 'a.js'))]);
+  const out = parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript }));
+  assert.ok(out && out.decision === 'block', 'Git reports the new path as R, not A');
+});

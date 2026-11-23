@@ -119,6 +119,7 @@ export function extractAuthoredPaths(jsonlText, { diffPaths = [] } = {}) {
   // Shell and edit call windows: tool_use id -> start ms, closed by the matching tool_result's timestamp.
   const open = new Map();
   const shellWindows = [];
+  const shellCommands = [];
 
   for (const line of String(jsonlText || "").split("\n")) {
     if (!line.trim()) continue;
@@ -148,6 +149,7 @@ export function extractAuthoredPaths(jsonlText, { diffPaths = [] } = {}) {
         if (norm) editTool.add(norm);
       } else if (SHELL_TOOLS.has(block.name) && typeof block.input?.command === "string") {
         const cmd = block.input.command;
+        shellCommands.push(cmd);
         if (!WRITE_VERB.test(cmd)) continue;
         const haystack = normalizePath(cmd);
         for (const d of diffNorm) {
@@ -160,7 +162,7 @@ export function extractAuthoredPaths(jsonlText, { diffPaths = [] } = {}) {
   }
   // A call with no recorded result (still running, or the transcript was cut) gets no window:
   // an open-ended one would claim every later write in the checkout.
-  return { editTool, bashWrite, shellWindows };
+  return { editTool, bashWrite, shellWindows, shellCommands };
 }
 
 /** Every transcript belonging to a session: its own, plus each subagent it dispatched. */
@@ -270,10 +272,19 @@ export function diffFiles(repoRoot, { scope = "auto", base = null } = {}) {
 export function editTargetsOutsideDiff({ transcripts, diff }) {
   const diffAbs = new Set(diff.map((d) => d.abs));
   const out = new Set();
+  const commands = [];
   for (const text of transcripts) {
-    for (const p of extractAuthoredPaths(text).editTool) if (!diffAbs.has(p)) out.add(p);
+    const found = extractAuthoredPaths(text);
+    for (const p of found.editTool) if (!diffAbs.has(p)) out.add(p);
+    commands.push(...found.shellCommands);
   }
-  return [...out];
+  // A file the session itself removed was deleted, not moved: a scratch file written and then
+  // `rm`'d must not make another session's new files look like this session's.
+  const removed = (p) => {
+    const base = p.slice(p.lastIndexOf("/") + 1).toLowerCase();
+    return commands.some((c) => /(?:^|[\s;&|(])(?:rm|del|unlink|Remove-Item)\s/i.test(c) && c.toLowerCase().includes(base));
+  };
+  return [...out].filter((p) => !removed(p));
 }
 
 export function assessAuthorship({ sessionId, transcripts, diff, transcriptsFound, probeFailed = false, mtimes = null }) {
@@ -481,6 +492,9 @@ export function main(argv = process.argv.slice(2)) {
   const orphanedEdits = editTargetsOutsideDiff({ transcripts: texts, diff })
     .filter((p) => p.startsWith(`${topAbs}/`) && !fs.existsSync(p))
     .map((p) => p.slice(topAbs.length + 1))
+    // Session machinery (other worktrees under .claude/worktrees/, handoffs, scratch) comes and
+    // goes without anything having been moved into the tree under review.
+    .filter((rel) => !/^\.claude\//i.test(rel))
     .sort();
 
   const receipt = {

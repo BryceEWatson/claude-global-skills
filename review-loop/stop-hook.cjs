@@ -150,9 +150,10 @@ function gitDiffChangedFiles(cwd) {
 }
 
 function gitAddedFiles(cwd) {
-  // Files that exist now but not in HEAD (staged additions and rename targets).
+  // Files that exist now but not in HEAD: staged additions (A) and the targets of
+  // staged renames (R; with --name-only Git prints the new path).
   try {
-    const out = execFileSync('git', ['-C', cwd, 'diff', 'HEAD', '--name-only', '--diff-filter=A'], {
+    const out = execFileSync('git', ['-C', cwd, 'diff', 'HEAD', '--name-only', '--diff-filter=AR'], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
     });
     return out.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
@@ -577,7 +578,14 @@ function reviewStarted(sessionId, run, tail) {
     if (!Array.isArray(content)) continue;
     for (const b of content) {
       if (!b || b.type !== 'tool_use') continue;
-      if (b.name === 'Agent' || b.name === 'Task') return true;
+      // An agent call counts only when it is a reviewer: sessions dispatch agents
+      // for ordinary work too, and that must not read as "the review started".
+      // The skill hands each lens file's body to its agent as the prompt, and a
+      // test checks every file under agents/ matches here. "review" is a common
+      // word, so an unrelated agent told to "review the config loader" still
+      // counts; that narrow miss costs one quiet window, not a lost review.
+      if ((b.name === 'Agent' || b.name === 'Task') && b.input
+        && /review|lens|adversar|falsif/i.test(`${b.input.description || ''} ${b.input.subagent_type || ''} ${String(b.input.prompt || '').slice(0, 2000)}`)) return true;
       if (b.name === 'Skill' && /review-loop/.test(String((b.input && b.input.skill) || ''))) return true;
     }
   }
@@ -916,10 +924,10 @@ function main() {
   // Pass what was measured rather than assuming either way.
   // A bystander stops many times beside the same foreign work. The guard reads
   // whole transcripts, so its "none of these are yours" answer is kept for as long
-  // as the reviewable files stay byte-identical: this session cannot have written
-  // a file whose content has not changed.
+  // as the reviewable files of this checkout stay byte-identical: this session
+  // cannot have written a file whose content has not changed.
   const stateKey = crypto.createHash('sha256').update(JSON.stringify(
-    reviewableFiles.map(f => [relKey(f), fingerprints[relKey(f)]]).sort())).digest('hex');
+    [relKey(root), reviewableFiles.map(f => [relKey(f), fingerprints[relKey(f)]]).sort()])).digest('hex');
   if (run && run.not_authored_key === stateKey) {
     emitAllowStop(`not-authored: the ${reviewableFiles.length} reviewable changed file(s) are unchanged since the guard last found none of them this session's`);
   }
@@ -943,8 +951,14 @@ function main() {
     // A file the session wrote and then moved sits here under a path no tool call
     // names. If the session wrote files in this repo that are now gone, every new
     // file (untracked, or added since HEAD) counts as possibly its own.
-    const newFiles = authorship.orphanedEdits.length
-      ? new Set(untracked.concat(gitAddedFiles(cwd)).map(relKey))
+    // Only new files of the same type as a vanished one: a moved file keeps its
+    // extension. This still over-counts when the session deleted a file some way
+    // the guard cannot see; that costs one review of someone else's file, never a
+    // missed review.
+    const extOf = (f) => { const b = relKey(f).split('/').pop(); const d = b.lastIndexOf('.'); return d > 0 ? b.slice(d) : ''; };
+    const goneExts = new Set(authorship.orphanedEdits.map(extOf));
+    const newFiles = goneExts.size
+      ? new Set(untracked.concat(gitAddedFiles(cwd)).filter(f => goneExts.has(extOf(f))).map(relKey))
       : new Set();
     const mine = reviewableFiles.filter(f => wrote.has(relKey(f))
       || fingerprints[relKey(f)] === 'absent' || newFiles.has(relKey(f)));
