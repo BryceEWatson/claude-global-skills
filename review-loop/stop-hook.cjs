@@ -556,7 +556,13 @@ function settleReview(sessionId, cwd, run, why) {
     const top = gitTopLevel(cwd);
     const now = reviewableNow(cwd);
     if (top && now) {
-      recordDispatched(lastFiredPath(sha1Short(top)), fingerprintFiles(top, now.reviewable), now.files, gitBranch(cwd));
+      // A hook-dispatched review covered the files listed in its run record, and
+      // only those are recorded as reviewed: another session's files beside them
+      // still get their own review. A review started by hand has no list and
+      // covered the whole diff.
+      const covered = run && Array.isArray(run.files) ? new Set(run.files) : null;
+      const reviewed = covered ? now.reviewable.filter(f => covered.has(relKey(f))) : now.reviewable;
+      recordDispatched(lastFiredPath(sha1Short(top)), fingerprintFiles(top, reviewed), now.files, gitBranch(cwd));
     }
   } catch (_) { /* best-effort: a failed settle only costs one extra review */ }
   writeRunRecord(sessionId, { ...(run || {}), settled_at: nowMs(), last_seen_at: nowMs() });
@@ -828,6 +834,10 @@ function main() {
   // Pass what was measured rather than assuming either way.
   const authorship = checkAuthorship(sessionId, cwd);
   const independence = authorship ? authorship.independence : 'unverified';
+  // The files this dispatch covers. When the guard can name this session's files,
+  // only those are recorded as dispatched, so the session that wrote the other
+  // changed files still gets a review of its own (its review may run other lenses).
+  let covered = reviewableFiles;
   if (authorship && independence !== 'unverified') {
     // The guard could read the transcripts and the tree, so it can say which
     // changed files this session wrote. A shared checkout holds other sessions'
@@ -836,7 +846,10 @@ function main() {
     const wrote = new Set(
       authorship.authoredFiles.concat(authorship.weakFiles, authorship.timingFiles).map(relKey),
     );
-    const mine = reviewableFiles.filter(f => wrote.has(relKey(f)));
+    // A deleted file has no modification time and `rm` names no write, so the
+    // guard has no way to attribute a deletion. Missing signals are not proof the
+    // session did not make it: a deleted reviewable file counts as possibly its own.
+    const mine = reviewableFiles.filter(f => wrote.has(relKey(f)) || fingerprints[relKey(f)] === 'absent');
     if (mine.length === 0) {
       emitAllowStop(`not-authored: this session wrote none of the ${reviewableFiles.length} reviewable changed file(s) `
         + `[${reviewableFiles.slice(0, 5).join(', ')}${reviewableFiles.length > 5 ? ', …' : ''}] (guard=${independence})`);
@@ -849,6 +862,7 @@ function main() {
     // lenses because another session left source files dirty beside it.
     const own = classifyDiff(mine, planRegexes, codeExts, deliverableRegexes);
     if (own.mode) mode = own.mode;
+    covered = mine;
   }
   // When the guard cannot tell (no transcript found, git unreadable, or the guard
   // is missing), the hook still fires, on every reviewable file, marked
@@ -859,8 +873,10 @@ function main() {
   // re-invoke the /review-loop skill, routed to the right reviewer lens set.
   // Note: this records dispatch, not completion — if the review is interrupted,
   // the same state won't auto-re-fire (run /review-loop manually to force).
-  recordDispatched(firedPath, fingerprints, files, gitBranch(cwd));
-  writeRunRecord(sessionId, { ...(run || {}), dispatched_at: nowMs(), mode });
+  const coveredPrints = {};
+  for (const f of covered) coveredPrints[relKey(f)] = fingerprints[relKey(f)];
+  recordDispatched(firedPath, coveredPrints, files, gitBranch(cwd));
+  writeRunRecord(sessionId, { ...(run || {}), dispatched_at: nowMs(), mode, files: covered.map(relKey) });
   const iteration = 0; // first invocation; skill will increment internally.
   const reviewable = planFiles.length + codeFiles.length + deliverableFiles.length;
   const selfAuthored = independence === 'refused' || independence === 'self-acknowledged';

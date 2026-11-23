@@ -833,3 +833,33 @@ test('state: REVIEW_LOOP_STATE_DIR moves the hook\'s state and log out of the ho
   assert.ok(fs.existsSync(path.join(stateDir, 'sid-statedir.hook-review.json')));
   assert.equal(hookLog(home), '', 'nothing was written to the default state folder');
 });
+
+test('authorship: a dispatch records only the files it covers, so the other author is still reviewed', () => {
+  const home = mkTempHome();
+  const repo = mkRepoWithDirtyFile(home);            // src/a.js: the code author's
+  fs.mkdirSync(path.join(repo, 'reports'), { recursive: true });
+  const report = path.join(repo, 'reports', 'summary.md');
+  fs.writeFileSync(report, '# summary\n');           // the report author's
+  deployGuard(home);
+  const t1 = writeTranscript(home, 'sid-report', [editRecord(report)]);
+  const first = parseStdout(runHook(home, { session_id: 'sid-report', cwd: repo, transcript_path: t1 }));
+  assert.ok(first && first.decision === 'block');
+  assert.match(first.reason, /--mode deliverable/, 'routed by the report author\'s own file');
+  // The code author stops next. Its source file was not covered by the deliverable review.
+  const t2 = writeTranscript(home, 'sid-code', [editRecord(path.join(repo, 'src', 'a.js'))]);
+  const second = parseStdout(runHook(home, { session_id: 'sid-code', cwd: repo, transcript_path: t2 }));
+  assert.ok(second && second.decision === 'block', 'the code author must still get its review');
+  assert.match(second.reason, /--mode code/);
+});
+
+test('authorship: a deletion nobody can be shown to have made still fires', () => {
+  const home = mkTempHome();
+  const repo = mkRepoWithDirtyFile(home);
+  git(repo, 'checkout', '-q', '--', '.');
+  fs.unlinkSync(path.join(repo, 'src', 'a.js'));     // `rm src/a.js` through the shell
+  deployGuard(home);
+  const sid = 'sid-deleter';
+  const transcript = writeTranscript(home, sid, [editRecord(path.join(home, 'notes', 'n.md'))]);
+  const out = parseStdout(runHook(home, { session_id: sid, cwd: repo, transcript_path: transcript }));
+  assert.ok(out && out.decision === 'block', 'missing signals are not proof the session did not delete it');
+});

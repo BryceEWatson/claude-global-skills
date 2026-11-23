@@ -44,7 +44,9 @@ in the three cases below, each logged to `.local-state/hook.log` with its reason
   work. The hook asks the authorship guard which changed files this session wrote: by an edit tool, by a
   shell command that names the file, or by a shell command that was running when the file was last modified
   (the only sign of an edit made through a script). If none of the reviewable files is among them, the stop
-  goes through. If the guard can't tell (no transcript found, or Git unreadable), the hook still runs the
+  goes through. A deleted file carries none of those signs, so a deletion always counts as possibly this
+  session's. When the hook does dispatch, it records only this session's files as handed to a review, so
+  the session that wrote the other changed files still gets its own. If the guard can't tell (no transcript found, or Git unreadable), the hook still runs the
   review and marks it `unverified`, because an unreadable transcript isn't evidence that the work is
   someone else's.
 - **A review is already running** (`review-in-progress`). After the hook dispatches a review for a session,
